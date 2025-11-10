@@ -4,6 +4,7 @@ import threading
 from math import floor, ceil
 
 import torch
+import cv2
 from skimage import transform as trans
 
 from torchvision.transforms import v2
@@ -40,6 +41,8 @@ class FrameWorker(threading.Thread):
 
     def run(self):
         try:
+            original_frame_bgr = self.frame[..., ::-1]
+            do_swap = False
             # Update parameters from markers (if exists) without concurrent access from other threads
             with self.main_window.models_processor.model_lock:
                 video_control_actions.update_parameters_and_control_from_marker(self.main_window, self.frame_number)
@@ -52,14 +55,28 @@ class FrameWorker(threading.Thread):
             # print(f"Processing frame {self.frame_number}")
             if self.main_window.swapfacesButton.isChecked() or self.main_window.editFacesButton.isChecked() or self.main_window.control['FrameEnhancerEnableToggle']:
                 self.frame = self.process_frame()
+                do_swap = self.main_window.swapfacesButton.isChecked()
             else:
                 # Img must be in BGR format
-                self.frame = self.frame[..., ::-1]  # Swap the channels from RGB to BGR
+                self.frame = original_frame_bgr  # Already converted to BGR
+
+            if do_swap:
+                fade_progress = getattr(self.main_window, "_fade_progress", 1.0)
+                fade_progress = max(0.0, min(1.0, fade_progress))
+                if fade_progress < 1.0:
+                    self.frame = cv2.addWeighted(self.frame, fade_progress, original_frame_bgr, 1.0 - fade_progress, 0.0)
+
             self.frame = np.ascontiguousarray(self.frame)
 
             # Display the frame if processing is still active
 
-            pixmap = common_widget_actions.get_pixmap_from_frame(self.main_window, self.frame)
+            display_frame = self.frame
+            if hasattr(self.main_window, "preprocess_frame_for_display"):
+                try:
+                    display_frame = self.main_window.preprocess_frame_for_display(self.frame)
+                except Exception:
+                    display_frame = self.frame
+            pixmap = common_widget_actions.get_pixmap_from_frame(self.main_window, display_frame)
 
             # Output processed Webcam frame
             if self.video_processor.file_type=='webcam' and not self.is_single_frame:

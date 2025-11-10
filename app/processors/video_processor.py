@@ -290,6 +290,10 @@ class VideoProcessor(QObject):
 
         # Handle webcam capture
         elif self.file_type == 'webcam':
+            if not self.media_capture:
+                # Media capture not ready yet; skip processing until initialized
+                return
+
             ret, frame = misc_helpers.read_frame(self.media_capture, preview_mode = False)
             if ret:
                 frame = frame[..., ::-1]  # Convert BGR to RGB

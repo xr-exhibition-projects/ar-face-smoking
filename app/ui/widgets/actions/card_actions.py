@@ -7,6 +7,8 @@ import cv2
 import torch
 from torchvision.transforms import v2
 
+import shiboken6
+
 import app.ui.widgets.actions.common_actions as common_widget_actions
 from app.ui.widgets.actions import list_view_actions
 import app.helpers.miscellaneous as misc_helpers
@@ -34,7 +36,8 @@ def clear_target_faces(main_window: 'MainWindow', refresh_frame=True):
 def clear_input_faces(main_window: 'MainWindow'):
     main_window.inputFacesList.clear()
     for _, input_face in main_window.input_faces.items():
-        input_face.deleteLater()
+        if shiboken6.isValid(input_face):
+            input_face.deleteLater()
     main_window.input_faces = {}
 
     for _, target_face in main_window.target_faces.items():
@@ -55,8 +58,14 @@ def clear_merged_embeddings(main_window: 'MainWindow'):
 
 def uncheck_all_input_faces(main_window: 'MainWindow'):
     # Uncheck All other input faces 
-    for _, input_face_button in main_window.input_faces.items():
-        input_face_button.setChecked(False)
+    stale_face_ids = []
+    for face_id, input_face_button in main_window.input_faces.items():
+        if shiboken6.isValid(input_face_button):
+            input_face_button.setChecked(False)
+        else:
+            stale_face_ids.append(face_id)
+    for face_id in stale_face_ids:
+        main_window.input_faces.pop(face_id, None)
 
 def uncheck_all_merged_embeddings(main_window: 'MainWindow'):
     for _, embed_button in  main_window.merged_embeddings.items():
