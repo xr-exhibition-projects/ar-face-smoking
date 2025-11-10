@@ -690,7 +690,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'RestoreEyesEnableToggle': {
             'level': 1,
             'label': 'Restore Eyes',
-            'default': False,
+            'default': True,
             'help': 'Restore eyes from the original face.'
         },
         'RestoreEyesBlendAmountSlider': {
@@ -787,7 +787,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'RestoreMouthEnableToggle': {
             'level': 1,
             'label': 'Restore Mouth',
-            'default': False,
+            'default': True,
             'help': 'Restore mouth from the original face.'
         },
         'RestoreMouthBlendAmountSlider': {

@@ -49,6 +49,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._pending_input_button = None
         self._default_images_dir = self._resolve_default_images_dir()
         self._display_frame_size: tuple[int, int] = (0, 0)
+        self.welcomeOverlay: Optional[QtWidgets.QWidget] = None
+        self.welcomeLabel: Optional[QtWidgets.QLabel] = None
+        self.restart_pixmap: Optional[QtGui.QPixmap] = None
+        self.restartButton: Optional[QtWidgets.QPushButton] = None
         super().__init__()
         self._webcam_backend_candidates = self._build_webcam_backend_candidates()
         self._webcam_button: Optional[widget_components.TargetMediaCardButton] = None
@@ -58,6 +62,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._swap_active: bool = False
         self._awaiting_second_click: bool = False
         self._second_press_triggered: bool = False
+        self._button_icon_state: str = "start"
+        self._current_button_pixmap: Optional[QtGui.QPixmap] = None
         self.fade_duration_ms: int = 15_000
         self.impossible_delay_ms: int = 2_200
         self._control_options_widget: Optional[QtWidgets.QWidget] = None
@@ -69,6 +75,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         self._load_default_input_faces()
         self._request_webcam_listing()
+        self._show_welcome_overlay()
 
     # ------------------------------------------------------------------ #
     #  MainWindow overrides
@@ -83,6 +90,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._position_impossible_label()
         if self.deathOverlay.isVisible():
             self.deathOverlay.setGeometry(self.rect())
+            self._refresh_death_overlay_graphics()
         self._position_config_button()
 
     # ------------------------------------------------------------------ #
@@ -121,51 +129,41 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._ensure_control_panel_widget()
 
         # Добавляем собственную кнопку поверх видео
-        self.buttonUport = QtWidgets.QPushButton(
-            "УПОРОТЬСЯ", parent=self.graphicsViewFrame.viewport()
-        )
+        self._start_pixmap = QtGui.QPixmap(self._resource_path("ui/start.png"))
+        self._finish_pixmap = QtGui.QPixmap(self._resource_path("ui/finish.png"))
+        self._welcome_pixmap = QtGui.QPixmap(self._resource_path("ui/not_museum.png"))
+        self._welcome_timer: Optional[QtCore.QTimer] = None
+        self._welcome_duration_ms: int = 45_000
+        self._welcome_active: bool = False
+
+        self.buttonUport = QtWidgets.QPushButton("", parent=self.graphicsViewFrame.viewport())
         self.buttonUport.setObjectName("buttonUport")
         self.buttonUport.setCheckable(True)
         self.buttonUport.setEnabled(False)
         self.buttonUport.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.buttonUport.setFlat(True)
         self.buttonUport.setStyleSheet(
             """
-            QPushButton#buttonUport {
-                background-color: #d32f2f;
-                color: #ffffff;
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 22px;
-                padding: 10px 28px;
+            QPushButton {
+                border: none;
+                background-color: transparent;
             }
-            QPushButton#buttonUport:checked {
-                background-color: #7f0000;
-            }
-            QPushButton#buttonUport:disabled {
-                background-color: #8d8d8d;
+            QPushButton:pressed {
+                transform: scale(0.98);
             }
             """
         )
+        self._update_uporotsya_button_icon(start=True)
         self.buttonUport.toggled.connect(self._on_uporotsya_toggled)
         self.buttonUport.clicked.connect(self._on_uporotsya_clicked)
         self._position_uporotsya_button()
         self.graphicsViewFrame.viewport().installEventFilter(self)
 
+        self._impossible_pixmap = QtGui.QPixmap(self._resource_path("ui/impossible.png"))
         self.messageLabel = QtWidgets.QLabel("", parent=self.graphicsViewFrame.viewport())
         self.messageLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.messageLabel.setWordWrap(True)
-        self.messageLabel.setStyleSheet(
-            """
-            QLabel {
-                background-color: rgba(0, 0, 0, 180);
-                color: #ffdddd;
-                font-size: 22px;
-                font-weight: bold;
-                border-radius: 16px;
-                padding: 14px 20px;
-            }
-            """
-        )
+        self.messageLabel.setWordWrap(False)
+        self.messageLabel.setStyleSheet("background-color: transparent; border: none;")
         self.messageLabel.hide()
         self.messageLabel.setObjectName("messageLabel")
 
@@ -175,37 +173,29 @@ class ARSmokingWindow(main_ui.MainWindow):
         death_layout = QtWidgets.QVBoxLayout(self.deathOverlay)
         death_layout.setContentsMargins(40, 40, 40, 40)
         death_layout.addStretch()
-        self.deathLabel = QtWidgets.QLabel("СМЕРТЬ\nНЕИЗБЕЖНА", self.deathOverlay)
+        self.deathLabel = QtWidgets.QLabel(self.deathOverlay)
         self.deathLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.deathLabel.setStyleSheet(
-            "color: #ff2d2d; font-size: 54px; font-weight: 900; letter-spacing: 6px; line-height: 120%;"
-        )
-        death_layout.addWidget(self.deathLabel)
+        self.deathLabel.setStyleSheet("background-color: transparent; border: none;")
+        self.death_pixmap = QtGui.QPixmap(self._resource_path("ui/death.png"))
+        if self.death_pixmap.isNull():
+            self.deathLabel.setText("СМЕРТЬ\nНЕИЗБЕЖНА")
+        death_layout.addWidget(self.deathLabel, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         death_layout.addSpacing(32)
 
-        self.restartButton = QtWidgets.QPushButton("НАЧАТЬ СНАЧАЛА", self.deathOverlay)
+        restart_pixmap = QtGui.QPixmap(self._resource_path("ui/restart.png"))
+        self.restartButton = QtWidgets.QPushButton("", self.deathOverlay)
         self.restartButton.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.restartButton.setFixedHeight(64)
-        self.restartButton.setMinimumWidth(260)
-        self.restartButton.setStyleSheet(
-            """
-            QPushButton {
-                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, stop:0 #ff4b4b, stop:1 #a10e10);
-                color: white;
-                font-size: 20px;
-                font-weight: bold;
-                border: none;
-                border-radius: 32px;
-                padding: 12px 32px;
-            }
-            QPushButton:hover {
-                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, stop:0 #ff5c5c, stop:1 #b41515);
-            }
-            QPushButton:pressed {
-                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, stop:0 #a10e10, stop:1 #700909);
-            }
-            """
-        )
+        self.restartButton.setFlat(True)
+        self.restartButton.setStyleSheet("border: none; background: transparent;")
+        self.restart_pixmap = restart_pixmap if not restart_pixmap.isNull() else None
+        if self.restart_pixmap is not None:
+            self.restartButton.setIcon(QtGui.QIcon(self.restart_pixmap))
+            self.restartButton.setIconSize(self.restart_pixmap.size())
+            self.restartButton.setFixedSize(self.restart_pixmap.size())
+        else:
+            self.restartButton.setText("НАЧАТЬ СНАЧАЛА")
+            self.restartButton.setMinimumWidth(260)
+            self.restartButton.setFixedHeight(64)
         self.restartButton.clicked.connect(self._restart_from_death_screen)
         restart_wrapper = QtWidgets.QHBoxLayout()
         restart_wrapper.addStretch()
@@ -214,6 +204,20 @@ class ARSmokingWindow(main_ui.MainWindow):
         death_layout.addLayout(restart_wrapper)
         death_layout.addSpacing(32)
         death_layout.addStretch()
+
+        # Welcome overlay
+        self.welcomeOverlay = QtWidgets.QWidget(self)
+        self.welcomeOverlay.setStyleSheet("background-color: #000000;")
+        self.welcomeOverlay.hide()
+        welcome_layout = QtWidgets.QVBoxLayout(self.welcomeOverlay)
+        welcome_layout.setContentsMargins(0, 0, 0, 0)
+        welcome_layout.addStretch()
+        self.welcomeLabel = QtWidgets.QLabel(self.welcomeOverlay)
+        self.welcomeLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.welcomeLabel.setStyleSheet("background-color: transparent; border: none;")
+        welcome_layout.addWidget(self.welcomeLabel, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.addStretch()
+        self.welcomeOverlay.installEventFilter(self)
 
         self.configButton = QtWidgets.QPushButton("⚙", self)
         self.configButton.setFixedSize(42, 42)
@@ -356,6 +360,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._try_enable_uporotsya()
 
     def _try_enable_uporotsya(self) -> None:
+        if self._welcome_active:
+            self.buttonUport.setEnabled(False)
+            return
         ready = self._target_ready and (
             self._input_ready or bool(self.cur_selected_target_face_button.assigned_input_faces)
         )
@@ -370,7 +377,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
 
         if checked:
-            self.buttonUport.setText("СЛЕЗТЬ")
+            self._update_uporotsya_button_icon(start=False)
             self.swapfacesButton.setChecked(True)
             self._stop_face_fade(reset_progress=True)
             self._start_face_fade_in()
@@ -380,7 +387,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonUport.setCheckable(False)
             self.messageLabel.hide()
         else:
-            self.buttonUport.setText("УПОРОТЬСЯ")
+            self._update_uporotsya_button_icon(start=True)
             self.swapfacesButton.setChecked(False)
             self._stop_face_fade(reset_progress=True)
             self._swap_active = False
@@ -392,7 +399,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonMediaPlay.setChecked(True)
 
     def _on_uporotsya_clicked(self) -> None:
-        if not self._swap_active or self.buttonUport.text() != "СЛЕЗТЬ":
+        if not self._swap_active or self._button_icon_state != "finish":
             return
         if self._awaiting_second_click:
             self._awaiting_second_click = False
@@ -439,14 +446,73 @@ class ARSmokingWindow(main_ui.MainWindow):
         display_width = min(width, int(height * aspect_ratio))
         display_width = max(1, display_width)
 
-        button_width = max(200, int(display_width * 0.9))
-        button_width = min(button_width, display_width - 40) if display_width > 40 else button_width
-        button_width = min(button_width, width - 40) if width > 40 else button_width
-        button_height = 48
+        self._refresh_button_size()
+        button_width = self.buttonUport.width()
+        button_height = self.buttonUport.height()
+        if button_width <= 0 or button_height <= 0:
+            button_width = max(200, int(display_width * 0.9))
+            button_height = 48
         pos_x = max(0, (width - button_width) // 2)
         pos_y = max(0, height - button_height - 24)
         self.buttonUport.setGeometry(pos_x, pos_y, button_width, button_height)
         self.buttonUport.raise_()
+
+    def _compute_available_button_width(self) -> int:
+        viewport = self.graphicsViewFrame.viewport()
+        width = viewport.width()
+        height = viewport.height()
+        if width <= 0 or height <= 0:
+            return max(width, 0)
+
+        frame_width, frame_height = getattr(self, "_display_frame_size", (width, height))
+        if frame_width <= 1 or frame_height <= 1:
+            frame_width = width
+            frame_height = height
+
+        aspect_ratio = frame_width / frame_height if frame_height else 1.0
+        if aspect_ratio <= 0:
+            aspect_ratio = width / height if height else 1.0
+        display_width = min(width, int(height * aspect_ratio))
+        display_width = max(1, display_width)
+        margin = 40
+        return max(1, min(display_width - margin, width - margin))
+
+    def _compute_frame_display_width(self) -> int:
+        viewport = self.graphicsViewFrame.viewport()
+        width = viewport.width()
+        height = viewport.height()
+        if width <= 0 or height <= 0:
+            return max(width, 0)
+
+        frame_width, frame_height = getattr(self, "_display_frame_size", (width, height))
+        frame_width = max(1, frame_width)
+        frame_height = max(1, frame_height)
+
+        aspect_ratio = frame_width / frame_height if frame_height else 1.0
+        if aspect_ratio <= 0:
+            aspect_ratio = width / height if height else 1.0
+        display_width = min(width, int(height * aspect_ratio))
+        display_width = max(1, display_width)
+        return display_width
+
+    def _scaled_button_pixmap(self, pixmap: QtGui.QPixmap, available_width: Optional[int] = None) -> QtGui.QPixmap:
+        if pixmap.isNull():
+            return pixmap
+
+        if available_width is None:
+            available_width = self._compute_available_button_width()
+        if available_width <= 0 or pixmap.width() <= available_width:
+            return pixmap
+
+        scale_factor = available_width / pixmap.width()
+        target_width = max(1, int(pixmap.width() * scale_factor))
+        target_height = max(1, int(pixmap.height() * scale_factor))
+        return pixmap.scaled(
+            target_width,
+            target_height,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
 
     def _position_config_button(self) -> None:
         if not hasattr(self, "configButton") or self.configButton is None:
@@ -476,7 +542,11 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         label_width = min(display_width - 60, width - 60) if display_width > 120 else display_width
         label_width = max(180, label_width)
-        label_height = self.messageLabel.sizeHint().height()
+        if self.messageLabel.pixmap():
+            label_width = min(label_width, self.messageLabel.pixmap().width())
+            label_height = self.messageLabel.pixmap().height()
+        else:
+            label_height = self.messageLabel.sizeHint().height()
         button_geom = None
         if hasattr(self, "buttonUport") and self.buttonUport:
             button_geom = self.buttonUport.geometry()
@@ -500,6 +570,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
             QtCore.QTimer.singleShot(0, self._position_impossible_label)
             QtCore.QTimer.singleShot(0, self._position_config_button)
+            QtCore.QTimer.singleShot(0, self._refresh_welcome_overlay_graphics)
+        if obj == getattr(self, "welcomeOverlay", None) and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick):
+            self._dismiss_welcome_overlay()
+            return True
         return super().eventFilter(obj, event)
 
     def _start_face_fade_in(self) -> None:
@@ -532,7 +606,13 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _show_impossible_message(self) -> None:
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
-        self.messageLabel.setText("НЕВОЗМОЖНО")
+        if self._impossible_pixmap and not self._impossible_pixmap.isNull():
+            scaled_pixmap = self._scaled_button_pixmap(self._impossible_pixmap)
+            self.messageLabel.setPixmap(scaled_pixmap)
+            self.messageLabel.setFixedSize(scaled_pixmap.size())
+            self.messageLabel.setText("")
+        else:
+            self.messageLabel.setText("НЕВОЗМОЖНО")
         self.messageLabel.show()
         self._position_impossible_label()
         self.messageLabel.raise_()
@@ -552,11 +632,15 @@ class ARSmokingWindow(main_ui.MainWindow):
             except Exception:
                 pass
             self.video_processor.media_capture = None
+        self.video_processor.media_path = False
+        self.video_processor.file_type = None
+        self.video_processor.current_frame = []
         self.swapfacesButton.setChecked(False)
         self._swap_active = False
         if self.control_window and self.control_window.isVisible():
             self.control_window.hide()
         self.deathOverlay.setGeometry(self.rect())
+        self._refresh_death_overlay_graphics()
         self.deathOverlay.show()
         self.deathOverlay.raise_()
         self.configButton.hide()
@@ -564,10 +648,9 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _restart_from_death_screen(self) -> None:
         self.deathOverlay.hide()
-        self.buttonUport.show()
-        self.configButton.show()
-        self._position_config_button()
-        QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+        self.buttonUport.hide()
+        self.configButton.hide()
+        self._show_welcome_overlay()
 
     def _prepare_next_session(self) -> None:
         self._stop_face_fade(reset_progress=True)
@@ -575,7 +658,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonUport.setEnabled(False)
             self.buttonUport.setCheckable(True)
             self.buttonUport.setChecked(False)
-            self.buttonUport.setText("УПОРОТЬСЯ")
+            self._update_uporotsya_button_icon(start=True)
         self._swap_active = False
         self._awaiting_second_click = False
         self._second_press_triggered = False
@@ -598,6 +681,116 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.video_processor.file_type = None
         QtCore.QTimer.singleShot(100, self._request_webcam_listing)
         QtCore.QTimer.singleShot(150, self._load_default_input_faces)
+
+    def _update_uporotsya_button_icon(self, start: bool) -> None:
+        pixmap = self._start_pixmap if start else self._finish_pixmap
+        self._button_icon_state = "start" if start else "finish"
+        self._current_button_pixmap = pixmap if pixmap and not pixmap.isNull() else None
+        tooltip = "Запустить режим" if start else "Остановить режим"
+        self.buttonUport.setToolTip(tooltip)
+        self.buttonUport.setAccessibleName(tooltip)
+        self.buttonUport.setAccessibleDescription(tooltip)
+        self._refresh_button_size()
+        QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+
+    def _refresh_button_size(self) -> None:
+        available_width = self._compute_available_button_width()
+        if self._current_button_pixmap and not self._current_button_pixmap.isNull():
+            scaled_pixmap = self._scaled_button_pixmap(self._current_button_pixmap, available_width)
+            icon = QtGui.QIcon(scaled_pixmap)
+            self.buttonUport.setIcon(icon)
+            self.buttonUport.setIconSize(scaled_pixmap.size())
+            self.buttonUport.setFixedSize(max(1, scaled_pixmap.width()), max(1, scaled_pixmap.height()))
+            self.buttonUport.setText("")
+        else:
+            self.buttonUport.setIcon(QtGui.QIcon())
+            text = "УПОРОТЬСЯ" if self._button_icon_state == "start" else "СЛЕЗТЬ"
+            self.buttonUport.setText(text)
+            if available_width <= 0:
+                min_width = 200
+            else:
+                min_width = max(200, min(available_width, self.width()))
+            self.buttonUport.setMinimumSize(min_width, 48)
+
+    def _refresh_death_overlay_graphics(self) -> None:
+        available_width = self._compute_available_button_width()
+
+        if self.death_pixmap and not self.death_pixmap.isNull():
+            scaled = self._scaled_button_pixmap(self.death_pixmap, available_width)
+            self.deathLabel.setPixmap(scaled)
+            self.deathLabel.setFixedSize(scaled.size())
+            self.deathLabel.setText("")
+        else:
+            self.deathLabel.setFixedSize(self.deathLabel.sizeHint())
+
+        if self.restart_pixmap and not self.restart_pixmap.isNull():
+            scaled_restart = self._scaled_button_pixmap(self.restart_pixmap, available_width)
+            self.restartButton.setIcon(QtGui.QIcon(scaled_restart))
+            self.restartButton.setIconSize(scaled_restart.size())
+            self.restartButton.setFixedSize(scaled_restart.size())
+            self.restartButton.setText("")
+        elif self.restartButton and not self.restartButton.text():
+            self.restartButton.setIcon(QtGui.QIcon())
+            self.restartButton.setText("НАЧАТЬ СНАЧАЛА")
+            self.restartButton.setMinimumWidth(260)
+            self.restartButton.setFixedHeight(64)
+
+    def _show_welcome_overlay(self) -> None:
+        if self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
+            return
+
+        self._welcome_active = True
+        self.welcomeOverlay.setGeometry(self.rect())
+        self._refresh_welcome_overlay_graphics()
+        self.welcomeOverlay.show()
+        self.welcomeOverlay.raise_()
+
+        if self._welcome_timer:
+            self._welcome_timer.stop()
+            self._welcome_timer.deleteLater()
+
+        self._welcome_timer = QtCore.QTimer(self)
+        self._welcome_timer.setSingleShot(True)
+        self._welcome_timer.timeout.connect(self._dismiss_welcome_overlay)
+        self._welcome_timer.start(self._welcome_duration_ms)
+
+    def _refresh_welcome_overlay_graphics(self) -> None:
+        if not self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
+            return
+        self.welcomeOverlay.setGeometry(self.rect())
+        available_width = self._compute_frame_display_width()
+        if self._welcome_pixmap and not self._welcome_pixmap.isNull():
+            scaled = self._welcome_pixmap.scaled(
+                available_width,
+                self.height(),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self.welcomeLabel.setPixmap(scaled)
+            self.welcomeLabel.setFixedSize(scaled.size())
+        else:
+            self.welcomeLabel.setText("")
+
+    def _dismiss_welcome_overlay(self) -> None:
+        if not self._welcome_active:
+            return
+        self._welcome_active = False
+        if self._welcome_timer:
+            self._welcome_timer.stop()
+            self._welcome_timer.deleteLater()
+            self._welcome_timer = None
+        if self.welcomeOverlay:
+            self.welcomeOverlay.hide()
+        self._initialize_post_welcome_state()
+        self._try_enable_uporotsya()
+
+    def _initialize_post_welcome_state(self) -> None:
+        if self.welcomeOverlay:
+            self.welcomeOverlay.hide()
+        self.buttonUport.show()
+        self.configButton.show()
+        self._position_config_button()
+        QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
 
     def _open_control_options_window(self) -> None:
         if not self._ensure_control_panel_widget():
@@ -745,6 +938,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._webcam_button.deleteLater()
         self._webcam_button = None
         return False
+
+    def _resource_path(self, relative_path: str) -> str:
+        base_path = Path(__file__).resolve().parents[2]
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            base_path = Path(sys._MEIPASS)
+        return str(base_path / relative_path)
 
 
 def _apply_style(app: QtWidgets.QApplication) -> None:

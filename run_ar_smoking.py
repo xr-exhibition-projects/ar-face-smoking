@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6 import QtWidgets
 import qdarktheme
 
-from app.ui import main_ui
+from app.ui.ar_smoking_ui import ARSmokingWindow
 from app.ui.core.proxy_style import ProxyStyle
 
 
@@ -47,10 +47,11 @@ def main() -> None:
     _style = qdarktheme.load_stylesheet(custom_colors={"primary": "#4facc9"}) + "\n" + _style
     app.setStyleSheet(_style)
 
-    window = main_ui.MainWindow()
+    window = ARSmokingWindow()
     window.show()
     app.exec()
 
 
 if __name__ == "__main__":
     main()
+
