@@ -216,6 +216,58 @@ class InputFacesLoaderWorker(qtc.QThread):
         self._running = False
         self.wait()
 
+class ModelWarmupWorker(qtc.QThread):
+    finished = qtc.Signal()
+
+    def __init__(self, main_window: 'MainWindow', parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+
+    def run(self):
+        try:
+            control = self.main_window.control.copy()
+            models_processor = self.main_window.models_processor
+
+            detect_model = detection_model_mapping[control['DetectorModelSelection']]
+            if not models_processor.models.get(detect_model):
+                models_processor.models[detect_model] = models_processor.load_model(detect_model)
+
+            landmark_model = landmark_model_mapping[control['LandmarkDetectModelSelection']]
+            if control.get('LandmarkDetectToggle') and not models_processor.models.get(landmark_model):
+                models_processor.models[landmark_model] = models_processor.load_model(landmark_model)
+
+            for recognition_model in ['Inswapper128ArcFace', 'SimSwapArcFace', 'GhostArcFace', 'CSCSArcFace', 'CSCSIDArcFace']:
+                if not models_processor.models.get(recognition_model):
+                    models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
+
+            restorer_model_map = {
+                'GFPGAN-v1.4': 'GFPGANv1.4',
+                'CodeFormer': 'CodeFormer',
+                'GPEN-256': 'GPENBFR256',
+                'GPEN-512': 'GPENBFR512',
+                'GPEN-1024': 'GPENBFR1024',
+                'GPEN-2048': 'GPENBFR2048',
+                'RestoreFormer++': 'RestoreFormerPlusPlus',
+                'VQFR-v2': 'VQFRv2',
+            }
+
+            if control.get('FaceRestorerEnableToggle'):
+                restorer_type = control.get('FaceRestorerTypeSelection')
+                restorer_model = restorer_model_map.get(restorer_type)
+                if restorer_model and not models_processor.models.get(restorer_model):
+                    models_processor.models[restorer_model] = models_processor.load_model(restorer_model)
+
+            if control.get('FaceRestorerEnable2Toggle'):
+                restorer_type = control.get('FaceRestorerType2Selection')
+                restorer_model = restorer_model_map.get(restorer_type)
+                if restorer_model and not models_processor.models.get(restorer_model):
+                    models_processor.models[restorer_model] = models_processor.load_model(restorer_model)
+        except Exception:  # pylint: disable=broad-except
+            traceback.print_exc()
+        finally:
+            self.finished.emit()
+
+
 class FilterWorker(qtc.QThread):
     filtered_results = qtc.Signal(list)
 

@@ -15,11 +15,14 @@ from app.ui import main_ui
 from app.ui.core.proxy_style import ProxyStyle
 from app.ui.widgets.actions import (
     card_actions,
+    layout_actions,
     list_view_actions,
     video_control_actions,
 )
 from app.ui.widgets import ui_workers, widget_components
 from app.ui.widgets.settings_layout_data import CAMERA_BACKENDS
+
+import cv2
 
 
 class ControlOptionsWindow(QtWidgets.QMainWindow):
@@ -53,9 +56,15 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.welcomeLabel: Optional[QtWidgets.QLabel] = None
         self.restart_pixmap: Optional[QtGui.QPixmap] = None
         self.restartButton: Optional[QtWidgets.QPushButton] = None
+        self.mediaToggleButton: Optional[QtWidgets.QPushButton] = None
+        self._media_mode: str = "webcam"
+        self._prevent_video_pause = True
         super().__init__()
         self._webcam_backend_candidates = self._build_webcam_backend_candidates()
         self._webcam_button: Optional[widget_components.TargetMediaCardButton] = None
+        self._demo_video_button: Optional[widget_components.TargetMediaCardButton] = None
+        demo_path = Path(self._resource_path("videos/v5.mp4"))
+        self._demo_video_path: Optional[Path] = demo_path if demo_path.is_file() else None
         self._fade_progress: float = 1.0
         self._fade_timer: Optional[QtCore.QTimer] = None
         self._fade_step: float = 0.0
@@ -73,6 +82,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._setup_ar_smoking_ui()
         self._connect_listeners()
 
+        self._model_warmup_worker = ui_workers.ModelWarmupWorker(self)
+        self._model_warmup_worker.finished.connect(self._on_warmup_finished)
+        self._model_warmup_worker.start()
+
         self._load_default_input_faces()
         self._request_webcam_listing()
         self._show_welcome_overlay()
@@ -85,6 +98,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         return
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        was_processing = getattr(self, "video_processor", None) and self.video_processor.processing
         super().resizeEvent(event)
         self._position_uporotsya_button()
         self._position_impossible_label()
@@ -92,6 +106,13 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.deathOverlay.setGeometry(self.rect())
             self._refresh_death_overlay_graphics()
         self._position_config_button()
+        if was_processing and not self.video_processor.processing:
+            if hasattr(self, "buttonMediaPlay"):
+                self.buttonMediaPlay.blockSignals(True)
+                self.buttonMediaPlay.setChecked(True)
+                self.buttonMediaPlay.blockSignals(False)
+                video_control_actions.set_play_button_icon_to_stop(self)
+            self.video_processor.process_video()
 
     # ------------------------------------------------------------------ #
     #  UI setup helpers
@@ -238,6 +259,32 @@ class ARSmokingWindow(main_ui.MainWindow):
         )
         self.configButton.clicked.connect(self._open_control_options_window)
 
+        self.mediaToggleButton = QtWidgets.QPushButton(self)
+        self.mediaToggleButton.setCheckable(True)
+        self.mediaToggleButton.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        self.mediaToggleButton.setStyleSheet(
+            """
+            QPushButton {
+                background-color: rgba(0,0,0,140);
+                color: white;
+                border-radius: 18px;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 6px 14px;
+            }
+            QPushButton:checked {
+                background-color: rgba(79,172,201,200);
+                color: black;
+            }
+            QPushButton:hover {
+                background-color: rgba(30,30,30,220);
+            }
+            """
+        )
+        self.mediaToggleButton.toggled.connect(self._on_media_toggle)
+        self.mediaToggleButton.hide()
+        self._update_media_toggle_button()
+
         # Убираем лишние отступы
         self.centralwidget.setContentsMargins(0, 0, 0, 0)
         if hasattr(self, "verticalLayout"):
@@ -251,6 +298,9 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _connect_listeners(self) -> None:
         self.inputFacesList.model().rowsInserted.connect(self._on_input_rows_inserted)
 
+    def _on_warmup_finished(self) -> None:
+        self._model_warmup_worker = None
+
     # ------------------------------------------------------------------ #
     #  Initialization helpers
     # ------------------------------------------------------------------ #
@@ -263,6 +313,8 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _request_webcam_listing(self) -> None:
         QtCore.QTimer.singleShot(150, lambda: self._ensure_webcam_entry())
+        if self._demo_video_path:
+            QtCore.QTimer.singleShot(1200, self._fallback_to_demo_video)
 
     def _load_default_input_faces(self) -> None:
         if not self._default_images_dir:
@@ -327,7 +379,11 @@ class ARSmokingWindow(main_ui.MainWindow):
                 QtCore.QTimer.singleShot(300, lambda: self._prepare_target_faces(retries + 1))
             return
 
+        was_playing = self.buttonMediaPlay.isChecked()
         card_actions.find_target_faces(self)
+        if was_playing and not self.video_processor.processing:
+            QtCore.QTimer.singleShot(0, self._ensure_playing)
+
         if self.target_faces:
             list(self.target_faces.values())[0].click()
             self._target_ready = True
@@ -366,6 +422,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         ready = self._target_ready and (
             self._input_ready or bool(self.cur_selected_target_face_button.assigned_input_faces)
         )
+        if not ready and self.selected_video_button:
+            ready = True
         self.buttonUport.setEnabled(ready)
 
     # ------------------------------------------------------------------ #
@@ -377,6 +435,16 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
 
         if checked:
+            if not self.target_faces:
+                card_actions.find_target_faces(self)
+                if not self.target_faces:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Лицо не найдено",
+                        "Не удалось обнаружить лицо. Убедитесь, что камера направлена на лицо и попробуйте ещё раз.",
+                    )
+                    self.buttonUport.setChecked(False)
+                    return
             self._update_uporotsya_button_icon(start=False)
             self.swapfacesButton.setChecked(True)
             self._stop_face_fade(reset_progress=True)
@@ -410,6 +478,112 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.buttonUport.setEnabled(False)
         self._stop_face_fade()
         self._show_impossible_message()
+
+    def _reset_swap_state(self) -> None:
+        self._swap_active = False
+        self._awaiting_second_click = False
+        self._second_press_triggered = False
+        if hasattr(self, "buttonUport") and self.buttonUport:
+            self.buttonUport.setEnabled(False)
+            self.buttonUport.setCheckable(True)
+            self.buttonUport.setChecked(False)
+            self._update_uporotsya_button_icon(start=True)
+        if hasattr(self, "swapfacesButton"):
+            self.swapfacesButton.setChecked(False)
+        if hasattr(self, "faceMaskCheckBox"):
+            self.faceMaskCheckBox.setChecked(False)
+        if hasattr(self, "faceCompareCheckBox"):
+            self.faceCompareCheckBox.setChecked(False)
+
+    def _ensure_default_input_face(self) -> None:
+        if not self.input_faces:
+            return
+        first_face = next(iter(self.input_faces.values()), None)
+        if not first_face:
+            return
+        self._pending_input_button = first_face
+        QtCore.QTimer.singleShot(0, lambda button=first_face: self._assign_input_face(button))
+
+    def _on_media_toggle(self, checked: bool) -> None:
+        target_mode = "webcam" if checked else "video"
+        if target_mode == self._media_mode:
+            return
+
+        success = self._activate_webcam_mode() if target_mode == "webcam" else self._activate_video_mode()
+
+        if not success:
+            self.mediaToggleButton.blockSignals(True)
+            self.mediaToggleButton.setChecked(self._media_mode == "webcam")
+            self.mediaToggleButton.blockSignals(False)
+            return
+
+        self._media_mode = target_mode
+        self._update_media_toggle_button()
+
+    def _activate_video_mode(self) -> bool:
+        self.buttonMediaPlay.setChecked(False)
+        self.video_processor.stop_processing()
+
+        self._reset_swap_state()
+        self._auto_target_selected = False
+        self._target_ready = False
+        self._input_ready = False
+        self._auto_face_selected = False
+        self._pending_input_button = None
+        self._ensure_default_input_face()
+
+        if not self._demo_video_path or not self._demo_video_path.is_file():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Демо-видео недоступно",
+                "Файл демо-видео нельзя найти. Добавьте файл или выберите веб-камеру.",
+            )
+            return False
+
+        self._auto_target_selected = False
+        self._target_ready = False
+        self._input_ready = False
+
+        success = self._load_demo_video()
+        if not success:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Не удалось загрузить видео",
+                "Попробуйте выбрать другой файл или переключиться на веб-камеру.",
+            )
+        return success
+
+    def _activate_webcam_mode(self) -> bool:
+        self.buttonMediaPlay.setChecked(False)
+        self.video_processor.stop_processing()
+
+        self._reset_swap_state()
+        self._auto_target_selected = False
+        self._target_ready = False
+        self._input_ready = False
+        self._auto_face_selected = False
+        self._pending_input_button = None
+        self._ensure_default_input_face()
+
+        success = False
+        for backend_name in self._webcam_backend_candidates:
+            backend_flag = CAMERA_BACKENDS[backend_name]
+            if self._load_webcam_direct(backend_flag, backend_name):
+                success = True
+                break
+
+        if not success:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Веб-камера недоступна",
+                "Не удалось подключиться к веб-камере. Проверьте устройство и попробуйте снова.",
+            )
+            return False
+
+        QtCore.QTimer.singleShot(120, self._ensure_playing)
+        QtCore.QTimer.singleShot(360, self._prepare_target_faces)
+        QtCore.QTimer.singleShot(400, self._try_enable_uporotsya)
+        return True
 
     # ------------------------------------------------------------------ #
     #  Webcam helpers
@@ -519,8 +693,18 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
         margin = 16
         y_offset = self.menuBar().height() + margin
-        self.configButton.move(self.width() - self.configButton.width() - margin, y_offset)
+        x_config = self.width() - self.configButton.width() - margin
+        if getattr(self, "mediaToggleButton", None) and self.mediaToggleButton.isVisible():
+            toggle_width = self.mediaToggleButton.width()
+            spacing = 12
+            x_toggle = max(margin, x_config - toggle_width - spacing)
+            self.mediaToggleButton.move(x_toggle, y_offset)
+            self.mediaToggleButton.raise_()
+            x_config = self.width() - self.configButton.width() - margin
+        self.configButton.move(x_config, y_offset)
         self.configButton.raise_()
+        if getattr(self, "mediaToggleButton", None) and self.mediaToggleButton.isVisible():
+            self.mediaToggleButton.raise_()
 
     def _position_impossible_label(self) -> None:
         if not hasattr(self, "messageLabel") or self.messageLabel is None or not self.messageLabel.isVisible():
@@ -564,6 +748,22 @@ class ARSmokingWindow(main_ui.MainWindow):
         pos_y = max(0, min(height - label_height, pos_y))
         self.messageLabel.setGeometry(pos_x, pos_y, label_width, label_height)
         self.messageLabel.raise_()
+
+    def _update_media_toggle_button(self) -> None:
+        if not self.mediaToggleButton:
+            return
+        is_webcam = self._media_mode == "webcam"
+        self.mediaToggleButton.blockSignals(True)
+        self.mediaToggleButton.setChecked(is_webcam)
+        self.mediaToggleButton.blockSignals(False)
+        if is_webcam:
+            self.mediaToggleButton.setText("Камера")
+            self.mediaToggleButton.setToolTip("Переключить на видео")
+        else:
+            self.mediaToggleButton.setText("Видео")
+            self.mediaToggleButton.setToolTip("Переключить на веб-камеру")
+        self.mediaToggleButton.adjustSize()
+        QtCore.QTimer.singleShot(0, self._position_config_button)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if obj == self.graphicsViewFrame.viewport() and event.type() == QtCore.QEvent.Resize:
@@ -644,12 +844,16 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.deathOverlay.show()
         self.deathOverlay.raise_()
         self.configButton.hide()
+        if self.mediaToggleButton:
+            self.mediaToggleButton.hide()
         self._prepare_next_session()
 
     def _restart_from_death_screen(self) -> None:
         self.deathOverlay.hide()
         self.buttonUport.hide()
         self.configButton.hide()
+        if self.mediaToggleButton:
+            self.mediaToggleButton.hide()
         self._show_welcome_overlay()
 
     def _prepare_next_session(self) -> None:
@@ -676,6 +880,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.scene.clear()
         if self.control_window:
             self.control_window.hide()
+        if self.mediaToggleButton:
+            self.mediaToggleButton.hide()
         self.video_processor.current_frame = []
         self.video_processor.media_path = False
         self.video_processor.file_type = None
@@ -789,8 +995,13 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.welcomeOverlay.hide()
         self.buttonUport.show()
         self.configButton.show()
+        if self.mediaToggleButton:
+            self.mediaToggleButton.show()
+            self._update_media_toggle_button()
         self._position_config_button()
         QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+        QtCore.QTimer.singleShot(0, self._ensure_playing)
+        QtCore.QTimer.singleShot(0, lambda: layout_actions.fit_image_to_view_onchange(self))
 
     def _open_control_options_window(self) -> None:
         if not self._ensure_control_panel_widget():
@@ -870,7 +1081,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _build_webcam_backend_candidates(self) -> list[str]:
         preferred = self.control.get("WebcamBackendSelection", "Default")
-        candidates = [preferred, "DirectShow", "MSMF", "Default"]
+        candidates = [preferred, "OBS Virtual Camera", "DirectShow", "MSMF", "Default"]
         seen: set[str] = set()
         ordered: list[str] = []
         for name in candidates:
@@ -887,6 +1098,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                 QtCore.QTimer.singleShot(120, self._ensure_playing)
                 QtCore.QTimer.singleShot(360, self._prepare_target_faces)
                 QtCore.QTimer.singleShot(400, self._position_uporotsya_button)
+                QtCore.QTimer.singleShot(500, self._try_enable_uporotsya)
             return
 
         if attempt >= len(self._webcam_backend_candidates):
@@ -904,13 +1116,31 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._auto_target_selected = True
             QtCore.QTimer.singleShot(120, self._ensure_playing)
             QtCore.QTimer.singleShot(360, self._prepare_target_faces)
+            QtCore.QTimer.singleShot(400, self._try_enable_uporotsya)
             return
 
         QtCore.QTimer.singleShot(250, lambda: self._ensure_webcam_entry(attempt + 1))
 
+    def _fallback_to_demo_video(self) -> None:
+        capture = self.video_processor.media_capture
+        if capture and capture.isOpened():
+            return
+        if not self._demo_video_path:
+            return
+        if self._load_demo_video():
+            QtCore.QTimer.singleShot(0, self._ensure_playing)
+
     def _ensure_playing(self) -> None:
-        if self.selected_video_button and not self.buttonMediaPlay.isChecked():
+        if not self.selected_video_button:
+            return
+
+        if not self.buttonMediaPlay.isChecked():
             self.buttonMediaPlay.setChecked(True)
+            return
+
+        if not self.video_processor.processing:
+            video_control_actions.set_play_button_icon_to_stop(self)
+            self.video_processor.process_video()
 
     def _load_webcam_direct(self, backend_flag: int, backend_name: str) -> bool:
         if self._webcam_button:
@@ -918,12 +1148,32 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._webcam_button = None
 
         media_id = str(uuid.uuid4())
+        webcam_index: int | str = 0
+        capture = None
+        if backend_name == "OBS Virtual Camera":
+            obs_device_names = ["video=OBS Virtual Camera", "video=OBS Virtual Camera (1)", "video=OBS Virtual Camera (2)"]
+            for device_name in obs_device_names:
+                temp_capture = cv2.VideoCapture(device_name, cv2.CAP_DSHOW)
+                if temp_capture.isOpened():
+                    capture = temp_capture
+                    webcam_index = device_name
+                    break
+                temp_capture.release()
+            if capture is None:
+                capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                if capture.isOpened():
+                    webcam_index = 0
+                else:
+                    capture.release()
+                    return False
+            backend_flag = cv2.CAP_DSHOW
+
         self._webcam_button = widget_components.TargetMediaCardButton(
-            media_path=f"Webcam 0 ({backend_name})",
+            media_path=f"Webcam ({backend_name})",
             file_type="webcam",
             media_id=media_id,
             is_webcam=True,
-            webcam_index=0,
+            webcam_index=webcam_index,
             webcam_backend=backend_flag,
             main_window=self,
         )
@@ -933,11 +1183,47 @@ class ARSmokingWindow(main_ui.MainWindow):
         capture = self.video_processor.media_capture
         if capture and capture.isOpened():
             self.target_videos = {media_id: self._webcam_button}
+            self._media_mode = "webcam"
+            self._update_media_toggle_button()
             return True
 
         self._webcam_button.deleteLater()
         self._webcam_button = None
         return False
+
+    def _load_demo_video(self) -> bool:
+        if not self._demo_video_path or not self._demo_video_path.is_file():
+            return False
+
+        if self._webcam_button:
+            self._webcam_button.deleteLater()
+            self._webcam_button = None
+
+        if self._demo_video_button:
+            self._demo_video_button.deleteLater()
+            self._demo_video_button = None
+
+        media_id = str(uuid.uuid4())
+        demo_button = widget_components.TargetMediaCardButton(
+            media_path=str(self._demo_video_path),
+            file_type="video",
+            media_id=media_id,
+            main_window=self,
+        )
+        demo_button.hide()
+        demo_button.load_media()
+
+        self._demo_video_button = demo_button
+        self.target_videos = {media_id: demo_button}
+        self.selected_video_button = demo_button
+
+        self._media_mode = "video"
+        self._update_media_toggle_button()
+
+        QtCore.QTimer.singleShot(120, self._ensure_playing)
+        QtCore.QTimer.singleShot(360, self._prepare_target_faces)
+        QtCore.QTimer.singleShot(400, self._try_enable_uporotsya)
+        return True
 
     def _resource_path(self, relative_path: str) -> str:
         base_path = Path(__file__).resolve().parents[2]

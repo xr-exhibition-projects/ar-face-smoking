@@ -64,6 +64,12 @@ class FrameWorker(threading.Thread):
                 fade_progress = getattr(self.main_window, "_fade_progress", 1.0)
                 fade_progress = max(0.0, min(1.0, fade_progress))
                 if fade_progress < 1.0:
+                    if (self.frame.shape[0] != original_frame_bgr.shape[0]) or (self.frame.shape[1] != original_frame_bgr.shape[1]):
+                        original_frame_bgr = cv2.resize(
+                            original_frame_bgr,
+                            (self.frame.shape[1], self.frame.shape[0]),
+                            interpolation=cv2.INTER_AREA,
+                        )
                     self.frame = cv2.addWeighted(self.frame, fade_progress, original_frame_bgr, 1.0 - fade_progress, 0.0)
 
             self.frame = np.ascontiguousarray(self.frame)

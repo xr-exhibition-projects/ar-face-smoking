@@ -191,6 +191,17 @@ def read_frame(capture_obj: cv2.VideoCapture, preview_mode=False):
         # frame = cv2.resize(fr2ame, dsize=(width, height), interpolation=cv2.INTER_LANCZOS4)
     return ret, frame
 
+def resize_frame_for_processing(frame: np.ndarray, max_width: int = 960, max_height: int = 540) -> np.ndarray:
+    if frame is None:
+        return frame
+    height, width = frame.shape[:2]
+    if width <= max_width and height <= max_height:
+        return frame
+    scale = min(max_width / width, max_height / height)
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    resized = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
+    return resized
+
 def read_image_file(image_path):
     try:
         img_array = np.fromfile(image_path, np.uint8)

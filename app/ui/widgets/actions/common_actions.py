@@ -425,5 +425,7 @@ def show_model_loading_dialog(main_window: 'MainWindow'):
 
 @QtCore.Slot()
 def hide_model_loading_dialog(main_window: 'MainWindow'):
-    main_window.model_loading_dialog.hide()
-    QtWidgets.QApplication.processEvents()
+    dialog = getattr(main_window, "model_loading_dialog", None)
+    if dialog:
+        dialog.hide()
+        QtWidgets.QApplication.processEvents()

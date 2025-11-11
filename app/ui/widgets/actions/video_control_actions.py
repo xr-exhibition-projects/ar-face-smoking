@@ -227,10 +227,8 @@ def enable_zoom_and_pan(view: QtWidgets.QGraphicsView):
             self.scale(factor, factor)
 
     def wheelEvent(self:QtWidgets.QGraphicsView, event:QtGui.QWheelEvent):
-        """Handle mouse wheel event for zooming."""
-        delta = event.angleDelta().y()
-        if delta != 0:
-            zoom(self, delta // abs(delta))
+        """Disable wheel zoom; fallback to default behaviour."""
+        QtWidgets.QGraphicsView.wheelEvent(self, event)
     
     def reset_zoom(self:QtWidgets.QGraphicsView):
         # print("Called reset_zoom()")
@@ -302,8 +300,24 @@ def enable_zoom_and_pan(view: QtWidgets.QGraphicsView):
 
 def play_video(main_window: 'MainWindow', checked: bool):
     video_processor = main_window.video_processor
+    prevent_pause = getattr(main_window, "_prevent_video_pause", False)
+
+    if prevent_pause and not checked:
+        main_window.buttonMediaPlay.blockSignals(True)
+        main_window.buttonMediaPlay.setChecked(True)
+        main_window.buttonMediaPlay.blockSignals(False)
+        set_play_button_icon_to_stop(main_window)
+        if not main_window.loading_new_media and not video_processor.processing and video_processor.media_capture:
+            video_processor.process_video()
+        return
+
     if checked:
         if video_processor.processing or video_processor.current_frame_number==video_processor.max_frame_number:
+            if prevent_pause:
+                set_play_button_icon_to_stop(main_window)
+                if not video_processor.processing and video_processor.media_capture:
+                    video_processor.process_video()
+                return
             print("play_video: Video already playing. Stopping the current video before starting a new one.")
             video_processor.stop_processing()
             return
@@ -311,8 +325,6 @@ def play_video(main_window: 'MainWindow', checked: bool):
         set_play_button_icon_to_stop(main_window)
         video_processor.process_video()
     else:
-        video_processor = main_window.video_processor
-        # print("play_video: Stopping video processing.")
         set_play_button_icon_to_play(main_window)
         video_processor.stop_processing()
         main_window.buttonMediaRecord.blockSignals(True)

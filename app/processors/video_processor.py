@@ -120,7 +120,7 @@ class VideoProcessor(QObject):
             if not self.recording:
                 video_control_actions.update_widget_values_from_markers(self.main_window, self.next_frame_to_display)
             graphics_view_actions.update_graphics_view(self.main_window, pixmap, self.next_frame_to_display)
-            self.threads.pop(self.next_frame_to_display)
+            self.threads.pop(self.next_frame_to_display, None)
             self.next_frame_to_display += 1
 
     def display_next_webcam_frame(self):
@@ -238,6 +238,7 @@ class VideoProcessor(QObject):
         if self.file_type == 'video' and self.media_capture:
             ret, frame = misc_helpers.read_frame(self.media_capture, preview_mode = not self.recording)
             if ret:
+                frame = misc_helpers.resize_frame_for_processing(frame)
                 frame = frame[..., ::-1]  # Convert BGR to RGB
                 # print(f"Enqueuing frame {self.current_frame_number}")
                 self.frame_queue.put(self.current_frame_number)
@@ -266,6 +267,7 @@ class VideoProcessor(QObject):
         if self.file_type == 'video' and self.media_capture:
             ret, frame = misc_helpers.read_frame(self.media_capture, preview_mode=False)
             if ret:
+                frame = misc_helpers.resize_frame_for_processing(frame)
                 frame = frame[..., ::-1]  # Convert BGR to RGB
                 # print(f"Enqueuing frame {self.current_frame_number}")
                 self.frame_queue.put(self.current_frame_number)
@@ -348,13 +350,15 @@ class VideoProcessor(QObject):
                 self.frame_queue.queue.clear()
 
             self.current_frame_number = self.main_window.videoSeekSlider.value()
-            self.media_capture.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_number)
+            if self.media_capture:
+                self.media_capture.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_number)
 
             if self.recording and self.file_type=='video':
                 self.recording_sp.stdin.close()
                 self.recording_sp.wait()
 
-            self.play_end_time = float(self.media_capture.get(cv2.CAP_PROP_POS_FRAMES) / float(self.fps))
+            if self.media_capture and self.fps:
+                self.play_end_time = float(self.media_capture.get(cv2.CAP_PROP_POS_FRAMES) / float(self.fps))
 
             if self.file_type=='video':
                 if self.recording:

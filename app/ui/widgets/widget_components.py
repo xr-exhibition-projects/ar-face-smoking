@@ -127,6 +127,7 @@ class TargetMediaCardButton(CardButton):
             main_window.selected_video_button = False
         
         # Stop the current video processing
+        main_window.loading_new_media = True
         main_window.video_processor.stop_processing()
 
     def reset_related_widgets_and_values(self):
@@ -157,6 +158,7 @@ class TargetMediaCardButton(CardButton):
             main_window.selected_video_button = False
         
         # Stop the current video processing
+        main_window.loading_new_media = True
         main_window.video_processor.stop_processing()
 
         if main_window.selected_target_face_id:
@@ -201,9 +203,18 @@ class TargetMediaCardButton(CardButton):
         elif self.file_type == 'webcam':
             res_width, res_height = self.main_window.control['WebcamMaxResSelection'].split('x')
 
-            media_capture = cv2.VideoCapture(self.webcam_index, self.webcam_backend)
-            media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(res_width))
-            media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(res_height))
+            if isinstance(self.webcam_index, str):
+                media_capture = cv2.VideoCapture(self.webcam_index, cv2.CAP_DSHOW)
+                if not media_capture.isOpened():
+                    media_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            else:
+                media_capture = cv2.VideoCapture(self.webcam_index, self.webcam_backend)
+
+            if media_capture.isOpened():
+                media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(res_width))
+                media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(res_height))
+ 
             max_frames_number = 999999
             _, frame = misc_helpers.read_frame(media_capture)
             main_window.video_processor.media_capture = media_capture

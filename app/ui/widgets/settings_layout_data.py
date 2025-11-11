@@ -211,7 +211,7 @@ SETTINGS_LAYOUT_DATA: LayoutDictTypes = {
         'WebcamBackendSelection': {
             'level': 2,
             'label': 'Webcam Backend',
-            'options': ['Default', 'DirectShow', 'MSMF', 'V4L', 'V4L2', 'GSTREAMER'],
+            'options': ['Default', 'DirectShow', 'MSMF', 'OBS Virtual Camera', 'V4L', 'V4L2', 'GSTREAMER'],
             'default': 'Default',
             'help': 'Choose the backend for accessing webcam input.'
         },
@@ -295,6 +295,7 @@ SETTINGS_LAYOUT_DATA: LayoutDictTypes = {
 CAMERA_BACKENDS = {
     'Default': cv2.CAP_ANY,
     'DirectShow': cv2.CAP_DSHOW,
+    'OBS Virtual Camera': cv2.CAP_DSHOW,
     'MSMF': cv2.CAP_MSMF,
     'V4L': cv2.CAP_V4L,
     'V4L2': cv2.CAP_V4L2,

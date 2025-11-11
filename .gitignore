@@ -35,3 +35,12 @@ dependencies/TensorRT/
 *.jpg
 *.exe
 .thumbnails
+
+# Build / installer artifacts
+build/
+dist/
+installer/
+*.spec
+*.iss
+*.msi
+*.pkg

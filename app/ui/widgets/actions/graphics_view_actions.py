@@ -62,9 +62,22 @@ def zoom_andfit_image_to_view_onchange(main_window: 'MainWindow', new_transform)
 def fit_image_to_view(main_window: 'MainWindow', pixmap_item: QtWidgets.QGraphicsPixmapItem, scene_rect):
     """Reset the view and fit the image to the view, keeping the aspect ratio."""
     # print("Called fit_image_to_view()")
-    graphicsViewFrame = main_window.graphicsViewFrame
-    # Reset the transform and set the scene rectangle
-    graphicsViewFrame.resetTransform()
-    graphicsViewFrame.setSceneRect(scene_rect)
-    # Fit the image to the view, keeping the aspect ratio
-    graphicsViewFrame.fitInView(pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+    if scene_rect.isEmpty():
+        return
+
+    def _perform_fit():
+        if pixmap_item.scene() is None:
+            return
+
+        graphicsViewFrame = main_window.graphicsViewFrame
+        viewport_rect = graphicsViewFrame.viewport().rect()
+        if viewport_rect.isEmpty() or viewport_rect.width() == 0 or viewport_rect.height() == 0:
+            QtCore.QTimer.singleShot(0, _perform_fit)
+            return
+
+        graphicsViewFrame.resetTransform()
+        graphicsViewFrame.setSceneRect(scene_rect)
+        graphicsViewFrame.fitInView(pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        graphicsViewFrame.centerOn(pixmap_item)
+
+    _perform_fit()
