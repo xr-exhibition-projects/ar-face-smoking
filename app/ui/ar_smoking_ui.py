@@ -54,8 +54,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._display_frame_size: tuple[int, int] = (0, 0)
         self.welcomeOverlay: Optional[QtWidgets.QWidget] = None
         self.welcomeLabel: Optional[QtWidgets.QLabel] = None
-        self.restart_pixmap: Optional[QtGui.QPixmap] = None
-        self.restartButton: Optional[QtWidgets.QPushButton] = None
         self.mediaToggleButton: Optional[QtWidgets.QPushButton] = None
         self._media_mode: str = "webcam"
         self._prevent_video_pause = True
@@ -106,6 +104,17 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.deathOverlay.setGeometry(self.rect())
             self._refresh_death_overlay_graphics()
         self._position_config_button()
+        if (
+            self._welcome_active
+            and self.welcomeAnimationLabel
+            and self.welcomeAnimationLabel.isVisible()
+            and self.welcomeLabel
+        ):
+            self.welcomeAnimationLabel.setFixedSize(self.welcomeLabel.size())
+            self.welcomeAnimationLabel.move(
+                (self.width() - self.welcomeAnimationLabel.width()) // 2,
+                (self.height() - self.welcomeAnimationLabel.height()) // 2,
+            )
         if was_processing and not self.video_processor.processing:
             if hasattr(self, "buttonMediaPlay"):
                 self.buttonMediaPlay.blockSignals(True)
@@ -153,6 +162,29 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._start_pixmap = QtGui.QPixmap(self._resource_path("ui/start.png"))
         self._finish_pixmap = QtGui.QPixmap(self._resource_path("ui/finish.png"))
         self._welcome_pixmap = QtGui.QPixmap(self._resource_path("ui/not_museum.png"))
+        self._overlay_frames: list[QtGui.QPixmap] = [
+            QtGui.QPixmap(self._resource_path("ui/overlay/1.png")),
+        ]
+        self._overlay_static = QtGui.QPixmap(self._resource_path("ui/overlay/2.png"))
+        self._overlay_mask = QtGui.QPixmap(self._resource_path("ui/overlay/3.png"))
+        self._overlay_frame_index: int = 0
+        self._overlay_timer: Optional[QtCore.QTimer] = None
+        death_frame_paths = [
+            "ui/death/1.png",
+            "ui/death/2.png",
+            "ui/death/3.png",
+            "ui/death/4.png",
+        ]
+        self._death_frames: list[QtGui.QPixmap] = [
+            QtGui.QPixmap(self._resource_path(path)) for path in death_frame_paths
+        ]
+        self._death_frames = [frame for frame in self._death_frames if not frame.isNull()]
+        self._death_intro_frame = self._death_frames[0] if self._death_frames else None
+        self._death_frame_index: int = 0
+        self._death_anim_timer: Optional[QtCore.QTimer] = None
+        self._current_death_frame: Optional[QtGui.QPixmap] = (
+            self._death_intro_frame if self._death_intro_frame and not self._death_intro_frame.isNull() else None
+        )
         self._welcome_timer: Optional[QtCore.QTimer] = None
         self._welcome_duration_ms: int = 45_000
         self._welcome_active: bool = False
@@ -191,38 +223,26 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.deathOverlay = QtWidgets.QWidget(self)
         self.deathOverlay.setStyleSheet("background-color: #000000;")
         self.deathOverlay.hide()
+        self.deathOverlay.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        self.deathOverlay.installEventFilter(self)
         death_layout = QtWidgets.QVBoxLayout(self.deathOverlay)
         death_layout.setContentsMargins(40, 40, 40, 40)
         death_layout.addStretch()
         self.deathLabel = QtWidgets.QLabel(self.deathOverlay)
         self.deathLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.deathLabel.setStyleSheet("background-color: transparent; border: none;")
-        self.death_pixmap = QtGui.QPixmap(self._resource_path("ui/death.png"))
-        if self.death_pixmap.isNull():
+        self.deathLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        fallback_death = QtGui.QPixmap(self._resource_path("ui/death.png"))
+        self.death_pixmap = (
+            self._current_death_frame
+            if self._current_death_frame
+            else (fallback_death if not fallback_death.isNull() else QtGui.QPixmap())
+        )
+        if self.death_pixmap and not self.death_pixmap.isNull():
+            self._set_death_label_frame(self.death_pixmap)
+        else:
             self.deathLabel.setText("СМЕРТЬ\nНЕИЗБЕЖНА")
         death_layout.addWidget(self.deathLabel, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        death_layout.addSpacing(32)
-
-        restart_pixmap = QtGui.QPixmap(self._resource_path("ui/restart.png"))
-        self.restartButton = QtWidgets.QPushButton("", self.deathOverlay)
-        self.restartButton.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.restartButton.setFlat(True)
-        self.restartButton.setStyleSheet("border: none; background: transparent;")
-        self.restart_pixmap = restart_pixmap if not restart_pixmap.isNull() else None
-        if self.restart_pixmap is not None:
-            self.restartButton.setIcon(QtGui.QIcon(self.restart_pixmap))
-            self.restartButton.setIconSize(self.restart_pixmap.size())
-            self.restartButton.setFixedSize(self.restart_pixmap.size())
-        else:
-            self.restartButton.setText("НАЧАТЬ СНАЧАЛА")
-            self.restartButton.setMinimumWidth(260)
-            self.restartButton.setFixedHeight(64)
-        self.restartButton.clicked.connect(self._restart_from_death_screen)
-        restart_wrapper = QtWidgets.QHBoxLayout()
-        restart_wrapper.addStretch()
-        restart_wrapper.addWidget(self.restartButton, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        restart_wrapper.addStretch()
-        death_layout.addLayout(restart_wrapper)
         death_layout.addSpacing(32)
         death_layout.addStretch()
 
@@ -239,6 +259,26 @@ class ARSmokingWindow(main_ui.MainWindow):
         welcome_layout.addWidget(self.welcomeLabel, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addStretch()
         self.welcomeOverlay.installEventFilter(self)
+
+        self.welcomeAnimationLabel = QtWidgets.QLabel(self.welcomeOverlay)
+        self.welcomeAnimationLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.welcomeAnimationLabel.setStyleSheet("background-color: transparent; border: none;")
+        self.welcomeAnimationLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.welcomeAnimationLabel.hide()
+        self.welcomeAnimationStaticLabel = QtWidgets.QLabel(self.welcomeOverlay)
+        self.welcomeAnimationStaticLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.welcomeAnimationStaticLabel.setStyleSheet("background-color: transparent; border: none;")
+        self.welcomeAnimationStaticLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.welcomeAnimationStaticLabel.hide()
+        self.welcomeAnimationMaskLabel = QtWidgets.QLabel(self.welcomeOverlay)
+        self.welcomeAnimationMaskLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.welcomeAnimationMaskLabel.setStyleSheet("background-color: transparent; border: none;")
+        self.welcomeAnimationMaskLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.welcomeAnimationMaskLabel.hide()
+        self._overlay_opacity_effect = QtWidgets.QGraphicsOpacityEffect(self.welcomeAnimationLabel)
+        self._overlay_opacity_effect.setOpacity(1.0)
+        self.welcomeAnimationLabel.setGraphicsEffect(self._overlay_opacity_effect)
+        self._overlay_fade_animation: Optional[QtCore.QPropertyAnimation] = None
 
         self.configButton = QtWidgets.QPushButton("⚙", self)
         self.configButton.setFixedSize(42, 42)
@@ -774,6 +814,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         if obj == getattr(self, "welcomeOverlay", None) and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick):
             self._dismiss_welcome_overlay()
             return True
+        if obj == getattr(self, "deathOverlay", None) and event.type() == QtCore.QEvent.MouseButtonRelease:
+            if self.deathOverlay.isVisible():
+                self._restart_from_death_screen()
+            return True
         return super().eventFilter(obj, event)
 
     def _start_face_fade_in(self) -> None:
@@ -843,12 +887,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._refresh_death_overlay_graphics()
         self.deathOverlay.show()
         self.deathOverlay.raise_()
+        self._start_death_animation()
         self.configButton.hide()
         if self.mediaToggleButton:
             self.mediaToggleButton.hide()
         self._prepare_next_session()
 
     def _restart_from_death_screen(self) -> None:
+        self._stop_death_animation()
         self.deathOverlay.hide()
         self.buttonUport.hide()
         self.configButton.hide()
@@ -921,25 +967,12 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _refresh_death_overlay_graphics(self) -> None:
         available_width = self._compute_available_button_width()
 
-        if self.death_pixmap and not self.death_pixmap.isNull():
-            scaled = self._scaled_button_pixmap(self.death_pixmap, available_width)
-            self.deathLabel.setPixmap(scaled)
-            self.deathLabel.setFixedSize(scaled.size())
-            self.deathLabel.setText("")
+        frame = self._current_death_frame or self.death_pixmap
+        if frame and not frame.isNull():
+            self._set_death_label_frame(frame, available_width)
         else:
             self.deathLabel.setFixedSize(self.deathLabel.sizeHint())
-
-        if self.restart_pixmap and not self.restart_pixmap.isNull():
-            scaled_restart = self._scaled_button_pixmap(self.restart_pixmap, available_width)
-            self.restartButton.setIcon(QtGui.QIcon(scaled_restart))
-            self.restartButton.setIconSize(scaled_restart.size())
-            self.restartButton.setFixedSize(scaled_restart.size())
-            self.restartButton.setText("")
-        elif self.restartButton and not self.restartButton.text():
-            self.restartButton.setIcon(QtGui.QIcon())
-            self.restartButton.setText("НАЧАТЬ СНАЧАЛА")
-            self.restartButton.setMinimumWidth(260)
-            self.restartButton.setFixedHeight(64)
+            self.deathLabel.setText("СМЕРТЬ\nНЕИЗБЕЖНА")
 
     def _show_welcome_overlay(self) -> None:
         if self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
@@ -950,6 +983,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._refresh_welcome_overlay_graphics()
         self.welcomeOverlay.show()
         self.welcomeOverlay.raise_()
+        self._start_overlay_animation()
 
         if self._welcome_timer:
             self._welcome_timer.stop()
@@ -964,18 +998,225 @@ class ARSmokingWindow(main_ui.MainWindow):
         if not self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
             return
         self.welcomeOverlay.setGeometry(self.rect())
-        available_width = self._compute_frame_display_width()
+        overlay_width = max(1, self.welcomeOverlay.width())
+        overlay_height = max(1, self.welcomeOverlay.height())
+        frame_height = overlay_height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > overlay_width:
+            frame_width = overlay_width
+            frame_height = int(frame_width * 16 / 9)
+        offset_x = (self.welcomeOverlay.width() - frame_width) // 2
+        offset_y = (self.welcomeOverlay.height() - frame_height) // 2
         if self._welcome_pixmap and not self._welcome_pixmap.isNull():
-            scaled = self._welcome_pixmap.scaled(
-                available_width,
-                self.height(),
+            pixmap = self._welcome_pixmap
+            scaled = pixmap.scaled(
+                frame_width,
+                frame_height,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
             self.welcomeLabel.setPixmap(scaled)
             self.welcomeLabel.setFixedSize(scaled.size())
+            self.welcomeLabel.move(
+                offset_x + (frame_width - scaled.width()) // 2,
+                offset_y + (frame_height - scaled.height()) // 2,
+            )
         else:
-            self.welcomeLabel.setText("")
+            self.welcomeLabel.setPixmap(QtGui.QPixmap())
+            self.welcomeLabel.setFixedSize(frame_width, frame_height)
+            self.welcomeLabel.move(offset_x, offset_y)
+
+        if self.welcomeAnimationLabel and self.welcomeAnimationLabel.isVisible():
+            self.welcomeAnimationLabel.setFixedSize(self.welcomeLabel.size())
+            self.welcomeAnimationLabel.move(
+                offset_x + (frame_width - self.welcomeAnimationLabel.width()) // 2,
+                offset_y + (frame_height - self.welcomeAnimationLabel.height()) // 2,
+            )
+            self._apply_overlay_animation_frame()
+        if self.welcomeAnimationStaticLabel and self.welcomeAnimationStaticLabel.isVisible():
+            self.welcomeAnimationStaticLabel.setFixedSize(self.welcomeLabel.size())
+            self.welcomeAnimationStaticLabel.move(
+                offset_x + (frame_width - self.welcomeAnimationStaticLabel.width()) // 2,
+                offset_y + (frame_height - self.welcomeAnimationStaticLabel.height()) // 2,
+            )
+        if self.welcomeAnimationMaskLabel and self.welcomeAnimationMaskLabel.isVisible():
+            self._update_overlay_mask_pixmap(self.welcomeLabel.size(), offset_x, offset_y)
+
+    def _set_death_label_frame(self, frame: Optional[QtGui.QPixmap], available_width: Optional[int] = None) -> None:
+        if not hasattr(self, "deathLabel") or self.deathLabel is None:
+            return
+        if not frame or frame.isNull():
+            self.deathLabel.clear()
+            self._current_death_frame = None
+            return
+        scaled = self._scaled_button_pixmap(frame, available_width)
+        if scaled.isNull():
+            self.deathLabel.clear()
+            self._current_death_frame = None
+            return
+        self.deathLabel.setPixmap(scaled)
+        self.deathLabel.setFixedSize(scaled.size())
+        self.deathLabel.setText("")
+        self._current_death_frame = frame
+
+    def _start_death_animation(self) -> None:
+        if hasattr(self, "deathLabel") and self.deathLabel:
+            self.deathLabel.show()
+        if self._death_intro_frame and not self._death_intro_frame.isNull():
+            self._set_death_label_frame(self._death_intro_frame)
+        elif self.death_pixmap and not self.death_pixmap.isNull():
+            self._set_death_label_frame(self.death_pixmap)
+
+        self._death_frame_index = 0
+        if not self._death_frames:
+            return
+        if self._death_anim_timer is None:
+            self._death_anim_timer = QtCore.QTimer(self)
+            self._death_anim_timer.timeout.connect(self._advance_death_animation)
+        self._death_anim_timer.start(250)
+
+    def _stop_death_animation(self) -> None:
+        if self._death_anim_timer and self._death_anim_timer.isActive():
+            self._death_anim_timer.stop()
+        if self._death_intro_frame and not self._death_intro_frame.isNull():
+            self._set_death_label_frame(self._death_intro_frame)
+        elif self.death_pixmap and not self.death_pixmap.isNull():
+            self._set_death_label_frame(self.death_pixmap)
+
+    def _advance_death_animation(self) -> None:
+        if not self._death_frames:
+            return
+        self._death_frame_index = (self._death_frame_index + 1) % len(self._death_frames)
+        self._set_death_label_frame(self._death_frames[self._death_frame_index])
+
+    def _start_overlay_animation(self) -> None:
+        valid_frames = [frame for frame in self._overlay_frames if not frame.isNull()]
+        if not valid_frames or not self.welcomeAnimationLabel:
+            return
+        self._overlay_frames = valid_frames
+        if self._overlay_timer is None:
+            self._overlay_timer = QtCore.QTimer(self)
+            self._overlay_timer.timeout.connect(self._advance_overlay_animation)
+
+        overlay_width = max(1, self.welcomeOverlay.width())
+        overlay_height = max(1, self.welcomeOverlay.height())
+        frame_height = overlay_height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > overlay_width:
+            frame_width = overlay_width
+            frame_height = int(frame_width * 16 / 9)
+        offset_x = (self.welcomeOverlay.width() - frame_width) // 2
+        offset_y = (self.welcomeOverlay.height() - frame_height) // 2
+
+        animation_size = QtCore.QSize(frame_width, frame_height)
+        self.welcomeAnimationLabel.setFixedSize(animation_size)
+        self.welcomeAnimationLabel.move(offset_x, offset_y)
+
+        if self._overlay_static and not self._overlay_static.isNull():
+            self.welcomeAnimationStaticLabel.setFixedSize(animation_size)
+            self.welcomeAnimationStaticLabel.move(offset_x, offset_y)
+            static_scaled = self._overlay_static.scaled(
+                animation_size,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self.welcomeAnimationStaticLabel.setPixmap(static_scaled)
+            self.welcomeAnimationStaticLabel.show()
+            self.welcomeAnimationStaticLabel.raise_()
+        else:
+            self.welcomeAnimationStaticLabel.hide()
+
+        if self._overlay_mask and not self._overlay_mask.isNull():
+            self._update_overlay_mask_pixmap(animation_size, offset_x, offset_y)
+        else:
+            self.welcomeAnimationMaskLabel.hide()
+
+        self.welcomeAnimationLabel.setGraphicsEffect(self._overlay_opacity_effect)
+        self.welcomeAnimationLabel.show()
+        self.welcomeAnimationLabel.raise_()
+        if self.welcomeAnimationMaskLabel and not self.welcomeAnimationMaskLabel.isHidden():
+            self.welcomeAnimationMaskLabel.raise_()
+
+        self._overlay_phase = 0.0
+        if not self._overlay_timer.isActive():
+            self._overlay_timer.start(33)  # ~30 fps
+
+        self._apply_overlay_animation_frame()
+
+    def _stop_overlay_animation(self) -> None:
+        if self._overlay_timer and self._overlay_timer.isActive():
+            self._overlay_timer.stop()
+        self._overlay_phase = 0.0
+        if self.welcomeAnimationLabel:
+            self.welcomeAnimationLabel.hide()
+        if self.welcomeAnimationStaticLabel:
+            self.welcomeAnimationStaticLabel.hide()
+        if self.welcomeAnimationMaskLabel:
+            self.welcomeAnimationMaskLabel.hide()
+
+    def _advance_overlay_animation(self) -> None:
+        if not self._overlay_frames or not self.welcomeAnimationLabel or not self.welcomeAnimationLabel.isVisible():
+            return
+        self._overlay_phase = (self._overlay_phase + 0.033) % 2.0
+        if self._overlay_phase <= 1.0:
+            opacity = self._overlay_phase
+        else:
+            opacity = 2.0 - self._overlay_phase
+        self._overlay_opacity_effect.setOpacity(opacity)
+
+    def _apply_overlay_animation_frame(self, animate: bool = False) -> None:
+        if not self._overlay_frames or not self.welcomeAnimationLabel or not self.welcomeAnimationLabel.isVisible():
+            return
+        frame = self._overlay_frames[self._overlay_frame_index]
+        if frame.isNull():
+            return
+        target_size = self.welcomeAnimationLabel.size()
+        scaled = frame.scaled(
+            target_size,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        image = QtGui.QImage(target_size, QtGui.QImage.Format.Format_ARGB32)
+        image.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(image)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+        x_offset = (scaled.width() - target_size.width()) // 2
+        y_offset = (scaled.height() - target_size.height()) // 2
+        painter.drawPixmap(-x_offset, -y_offset, scaled)
+        painter.end()
+        self.welcomeAnimationLabel.setPixmap(QtGui.QPixmap.fromImage(image))
+        if not animate:
+            self._overlay_opacity_effect.setOpacity(1.0)
+
+    def _update_overlay_mask_pixmap(self, target_size: QtCore.QSize, offset_x: int, offset_y: int) -> None:
+        if not self.welcomeAnimationMaskLabel:
+            return
+        if not self._overlay_mask or self._overlay_mask.isNull():
+            self.welcomeAnimationMaskLabel.hide()
+            return
+
+        mask_original = self._overlay_mask
+        mask_scaled = mask_original.scaled(
+            target_size,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        crop_width = target_size.width()
+        crop_height = target_size.height()
+        crop_width = min(crop_width, mask_scaled.width())
+        crop_height = min(crop_height, mask_scaled.height())
+        start_x = max(0, (mask_scaled.width() - crop_width) // 2)
+        start_y = max(0, (mask_scaled.height() - crop_height) // 2)
+        mask_cropped = mask_scaled.copy(start_x, start_y, crop_width, crop_height)
+        if mask_original.devicePixelRatioF() != mask_cropped.devicePixelRatioF():
+            mask_cropped.setDevicePixelRatio(mask_original.devicePixelRatioF())
+
+        self.welcomeAnimationMaskLabel.setGraphicsEffect(None)
+        self.welcomeAnimationMaskLabel.setFixedSize(target_size)
+        self.welcomeAnimationMaskLabel.move(offset_x, offset_y)
+        self.welcomeAnimationMaskLabel.setPixmap(mask_cropped)
+        self.welcomeAnimationMaskLabel.show()
+        self.welcomeAnimationMaskLabel.raise_()
 
     def _dismiss_welcome_overlay(self) -> None:
         if not self._welcome_active:
@@ -987,6 +1228,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._welcome_timer = None
         if self.welcomeOverlay:
             self.welcomeOverlay.hide()
+        self._stop_overlay_animation()
         self._initialize_post_welcome_state()
         self._try_enable_uporotsya()
 
