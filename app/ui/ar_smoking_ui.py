@@ -25,6 +25,36 @@ from app.ui.widgets.settings_layout_data import CAMERA_BACKENDS
 import cv2
 
 
+# Asset paths
+ASSETS_BASE_DIR = "assets"
+ASSETS_IMAGES_DIR = f"{ASSETS_BASE_DIR}/images"
+ASSETS_UI_DIR = f"{ASSETS_BASE_DIR}/ui"
+ASSETS_VIDEOS_DIR = f"{ASSETS_BASE_DIR}/videos"
+
+# UI image paths
+PATH_UI_START = f"{ASSETS_UI_DIR}/start.png"
+PATH_UI_FINISH = f"{ASSETS_UI_DIR}/finish.png"
+PATH_UI_WELCOME = f"{ASSETS_UI_DIR}/not_museum.png"
+PATH_UI_IMPOSSIBLE = f"{ASSETS_UI_DIR}/impossible.png"
+PATH_UI_DEATH = f"{ASSETS_UI_DIR}/death.png"
+
+# Overlay image paths
+PATH_UI_OVERLAY_1 = f"{ASSETS_UI_DIR}/overlay/1.png"
+PATH_UI_OVERLAY_2 = f"{ASSETS_UI_DIR}/overlay/2.png"
+PATH_UI_OVERLAY_3 = f"{ASSETS_UI_DIR}/overlay/3.png"
+
+# Death animation paths
+DEATH_FRAME_PATHS = [
+    f"{ASSETS_UI_DIR}/death/1.png",
+    f"{ASSETS_UI_DIR}/death/2.png",
+    f"{ASSETS_UI_DIR}/death/3.png",
+    f"{ASSETS_UI_DIR}/death/4.png",
+]
+
+# Video paths
+PATH_DEMO_VIDEO = f"{ASSETS_VIDEOS_DIR}/demo.mp4"
+
+
 class ControlOptionsWindow(QtWidgets.QMainWindow):
     closed = QtCore.Signal()
 
@@ -61,7 +91,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._webcam_backend_candidates = self._build_webcam_backend_candidates()
         self._webcam_button: Optional[widget_components.TargetMediaCardButton] = None
         self._demo_video_button: Optional[widget_components.TargetMediaCardButton] = None
-        demo_path = Path(self._resource_path("videos/v5.mp4"))
+        demo_path = Path(self._resource_path(PATH_DEMO_VIDEO))
         self._demo_video_path: Optional[Path] = demo_path if demo_path.is_file() else None
         self._fade_progress: float = 1.0
         self._fade_timer: Optional[QtCore.QTimer] = None
@@ -159,22 +189,17 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._ensure_control_panel_widget()
 
         # Добавляем собственную кнопку поверх видео
-        self._start_pixmap = QtGui.QPixmap(self._resource_path("ui/start.png"))
-        self._finish_pixmap = QtGui.QPixmap(self._resource_path("ui/finish.png"))
-        self._welcome_pixmap = QtGui.QPixmap(self._resource_path("ui/not_museum.png"))
+        self._start_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_START))
+        self._finish_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_FINISH))
+        self._welcome_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_WELCOME))
         self._overlay_frames: list[QtGui.QPixmap] = [
-            QtGui.QPixmap(self._resource_path("ui/overlay/1.png")),
+            QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_1)),
         ]
-        self._overlay_static = QtGui.QPixmap(self._resource_path("ui/overlay/2.png"))
-        self._overlay_mask = QtGui.QPixmap(self._resource_path("ui/overlay/3.png"))
+        self._overlay_static = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_2))
+        self._overlay_mask = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_3))
         self._overlay_frame_index: int = 0
         self._overlay_timer: Optional[QtCore.QTimer] = None
-        death_frame_paths = [
-            "ui/death/1.png",
-            "ui/death/2.png",
-            "ui/death/3.png",
-            "ui/death/4.png",
-        ]
+        death_frame_paths = DEATH_FRAME_PATHS
         self._death_frames: list[QtGui.QPixmap] = [
             QtGui.QPixmap(self._resource_path(path)) for path in death_frame_paths
         ]
@@ -212,7 +237,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._position_uporotsya_button()
         self.graphicsViewFrame.viewport().installEventFilter(self)
 
-        self._impossible_pixmap = QtGui.QPixmap(self._resource_path("ui/impossible.png"))
+        self._impossible_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_IMPOSSIBLE))
         self.messageLabel = QtWidgets.QLabel("", parent=self.graphicsViewFrame.viewport())
         self.messageLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.messageLabel.setWordWrap(False)
@@ -232,7 +257,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.deathLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.deathLabel.setStyleSheet("background-color: transparent; border: none;")
         self.deathLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        fallback_death = QtGui.QPixmap(self._resource_path("ui/death.png"))
+        fallback_death = QtGui.QPixmap(self._resource_path(PATH_UI_DEATH))
         self.death_pixmap = (
             self._current_death_frame
             if self._current_death_frame
@@ -346,7 +371,8 @@ class ARSmokingWindow(main_ui.MainWindow):
     # ------------------------------------------------------------------ #
     def _resolve_default_images_dir(self) -> Optional[str]:
         project_root = Path(__file__).resolve().parents[2]
-        images_dir = project_root / "images"
+        # Path works with forward slashes on all platforms
+        images_dir = project_root / ASSETS_IMAGES_DIR
         if images_dir.is_dir():
             return str(images_dir)
         return None
@@ -361,7 +387,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Папка с изображениями не найдена",
-                "Не удалось найти папку `images`. Добавьте туда изображение для подмены лица.",
+                f"Не удалось найти папку `{ASSETS_IMAGES_DIR}`. Добавьте туда изображение для подмены лица.",
             )
             return
 
@@ -401,7 +427,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Нет исходных лиц",
-                "В папке `images` не найдено ни одного лица. Добавьте изображение и перезапустите UI.",
+                f"В папке `{ASSETS_IMAGES_DIR}` не найдено ни одного лица. Добавьте изображение и перезапустите UI.",
             )
             return
 
