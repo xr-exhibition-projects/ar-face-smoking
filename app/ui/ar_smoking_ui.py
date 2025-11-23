@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 import uuid
 
 import numpy as np
@@ -54,6 +55,9 @@ DEATH_FRAME_PATHS = [
 # Video paths
 PATH_DEMO_VIDEO = f"{ASSETS_VIDEOS_DIR}/demo.mp4"
 
+# Animation config path
+ANIMATION_CONFIG_PATH = "animation_config.json"
+
 
 class ControlOptionsWindow(QtWidgets.QMainWindow):
     closed = QtCore.Signal()
@@ -101,10 +105,17 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._second_press_triggered: bool = False
         self._button_icon_state: str = "start"
         self._current_button_pixmap: Optional[QtGui.QPixmap] = None
-        self.fade_duration_ms: int = 15_000
-        self.impossible_delay_ms: int = 2_200
         self._control_options_widget: Optional[QtWidgets.QWidget] = None
         self.control_window: Optional[ControlOptionsWindow] = None
+        
+        # Animation stage tracking
+        self._current_stage: int = 0  # 0 = not started, 1 = stage1, 2 = stage2, 3 = stage3
+        self._stage1_timer: Optional[QtCore.QTimer] = None
+        self._stage2_timer: Optional[QtCore.QTimer] = None
+        
+        # Load animation config
+        self._animation_config = self._load_animation_config()
+        self._animation_stages = self._animation_config.get("animation_stages", {})
 
         self.setWindowTitle("AR Smoking UI")
         self._setup_ar_smoking_ui()
@@ -366,6 +377,82 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _on_warmup_finished(self) -> None:
         self._model_warmup_worker = None
 
+    def _load_animation_config(self) -> dict:
+        """Загружает конфигурацию анимации из JSON файла."""
+        default_config = {
+            "animation_stages": {
+                "stage1": {
+                    "duration_ms": 5000,
+                    "start_intensity": 0.0,
+                    "end_intensity": 0.4,
+                    "show_finish_button_delay_ms": 4000
+                },
+                "stage2": {
+                    "duration_ms": 3000,
+                    "start_intensity": 0.4,
+                    "end_intensity": 0.7,
+                    "show_impossible_delay_ms": 4000
+                },
+                "stage3": {
+                    "duration_ms": 3000,
+                    "start_intensity": 0.7,
+                    "end_intensity": 1.0
+                }
+            }
+        }
+        
+        # Пытаемся найти конфиг в корне проекта
+        project_root = Path(__file__).resolve().parents[2]
+        config_path = project_root / ANIMATION_CONFIG_PATH
+        
+        # Если не найден, пробуем через _resource_path (если доступен)
+        if not config_path.exists():
+            try:
+                # Пробуем использовать метод _resource_path, если он доступен
+                if hasattr(self, '_resource_path'):
+                    config_path = Path(self._resource_path(ANIMATION_CONFIG_PATH))
+                elif hasattr(super(), '_resource_path'):
+                    config_path = Path(super()._resource_path(ANIMATION_CONFIG_PATH))
+            except Exception:
+                # Если _resource_path недоступен, используем корень проекта
+                pass
+        
+        if not config_path.exists():
+            # Создаём файл с дефолтными значениями
+            try:
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(default_config, f, indent=2, ensure_ascii=False)
+                print(f"Создан файл конфигурации анимации: {config_path}")
+            except Exception as e:
+                print(f"Не удалось создать файл конфигурации: {e}")
+            return default_config
+        
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            # Валидация и применение дефолтных значений для отсутствующих ключей
+            if "animation_stages" not in config:
+                config["animation_stages"] = default_config["animation_stages"]
+            else:
+                for stage_name in default_config["animation_stages"]:
+                    if stage_name not in config["animation_stages"]:
+                        config["animation_stages"][stage_name] = default_config["animation_stages"][stage_name]
+                    else:
+                        # Проверяем наличие всех полей в этапе
+                        for key in default_config["animation_stages"][stage_name]:
+                            if key not in config["animation_stages"][stage_name]:
+                                config["animation_stages"][stage_name][key] = default_config["animation_stages"][stage_name][key]
+            
+            print(f"Загружена конфигурация анимации из: {config_path}")
+            return config
+        except json.JSONDecodeError as e:
+            print(f"Ошибка парсинга JSON в конфигурации анимации: {e}. Используются значения по умолчанию.")
+            return default_config
+        except Exception as e:
+            print(f"Ошибка при загрузке конфигурации анимации: {e}. Используются значения по умолчанию.")
+            return default_config
+
     # ------------------------------------------------------------------ #
     #  Initialization helpers
     # ------------------------------------------------------------------ #
@@ -511,10 +598,11 @@ class ARSmokingWindow(main_ui.MainWindow):
                     )
                     self.buttonUport.setChecked(False)
                     return
-            self._update_uporotsya_button_icon(start=False)
+            # Начинаем первый этап анимации
             self.swapfacesButton.setChecked(True)
             self._stop_face_fade(reset_progress=True)
-            self._start_face_fade_in()
+            self._current_stage = 1
+            self._start_stage1_animation()
             self._swap_active = True
             self._awaiting_second_click = True
             self._second_press_triggered = False
@@ -540,10 +628,14 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
         if self._second_press_triggered:
             return
+        if self._current_stage != 1:
+            return
+        
+        # Переход ко второму этапу
         self._second_press_triggered = True
-        self.buttonUport.setEnabled(False)
+        self._current_stage = 2
         self._stop_face_fade()
-        self._show_impossible_message()
+        self._start_stage2_animation()
 
     def _reset_swap_state(self) -> None:
         self._swap_active = False
@@ -846,32 +938,153 @@ class ARSmokingWindow(main_ui.MainWindow):
             return True
         return super().eventFilter(obj, event)
 
-    def _start_face_fade_in(self) -> None:
-        self._fade_progress = 0.0
+    def _start_stage1_animation(self) -> None:
+        """Запускает первый этап анимации: 0.0 -> 0.4"""
+        stage_config = self._animation_stages.get("stage1", {})
+        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.0)))
+        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 0.4)))
+        duration_ms = stage_config.get("duration_ms", 5000)
+        show_button_delay = stage_config.get("show_finish_button_delay_ms", 4000)
+        
+        self._fade_progress = start_intensity
         if self._fade_timer:
             self._fade_timer.stop()
             self._fade_timer.deleteLater()
         self._fade_timer = QtCore.QTimer(self)
         interval_ms = 50
-        total = float(max(1, self.fade_duration_ms))
-        self._fade_step = interval_ms / total
-        self._fade_timer.timeout.connect(self._update_fade_progress)
+        total = float(max(1, duration_ms))
+        intensity_range = end_intensity - start_intensity
+        self._fade_step = (interval_ms / total) * intensity_range
+        # Используем замыкание для передачи end_intensity
+        def update_progress():
+            self._update_fade_progress(end_intensity)
+        self._fade_timer.timeout.connect(update_progress)
         self._fade_timer.start(interval_ms)
-
-    def _update_fade_progress(self) -> None:
-        self._fade_progress = min(1.0, self._fade_progress + self._fade_step)
-        if self._fade_progress >= 1.0 and self._fade_timer:
+        
+        # Запускаем таймер для показа кнопки "слезть"
+        if self._stage1_timer:
+            self._stage1_timer.stop()
+            self._stage1_timer.deleteLater()
+        self._stage1_timer = QtCore.QTimer(self)
+        self._stage1_timer.setSingleShot(True)
+        self._stage1_timer.timeout.connect(self._show_finish_button)
+        self._stage1_timer.start(show_button_delay)
+    
+    def _start_stage2_animation(self) -> None:
+        """Запускает второй этап анимации: 0.4 -> 0.7"""
+        stage_config = self._animation_stages.get("stage2", {})
+        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.4)))
+        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 0.7)))
+        duration_ms = stage_config.get("duration_ms", 3000)
+        show_impossible_delay = stage_config.get("show_impossible_delay_ms", 4000)
+        
+        self._fade_progress = start_intensity
+        if self._fade_timer:
             self._fade_timer.stop()
             self._fade_timer.deleteLater()
-            self._fade_timer = None
+        self._fade_timer = QtCore.QTimer(self)
+        interval_ms = 50
+        total = float(max(1, duration_ms))
+        intensity_range = end_intensity - start_intensity
+        self._fade_step = (interval_ms / total) * intensity_range
+        # Используем замыкание для передачи end_intensity
+        def update_progress():
+            self._update_fade_progress(end_intensity)
+        self._fade_timer.timeout.connect(update_progress)
+        self._fade_timer.start(interval_ms)
+        
+        # Запускаем таймер для показа надписи "невозможно"
+        if self._stage2_timer:
+            self._stage2_timer.stop()
+            self._stage2_timer.deleteLater()
+        self._stage2_timer = QtCore.QTimer(self)
+        self._stage2_timer.setSingleShot(True)
+        self._stage2_timer.timeout.connect(self._show_impossible_and_start_stage3)
+        self._stage2_timer.start(show_impossible_delay)
+    
+    def _start_stage3_animation(self) -> None:
+        """Запускает третий этап анимации: 0.7 -> 1.0"""
+        stage_config = self._animation_stages.get("stage3", {})
+        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.7)))
+        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 1.0)))
+        duration_ms = stage_config.get("duration_ms", 3000)
+        
+        self._fade_progress = start_intensity
+        if self._fade_timer:
+            self._fade_timer.stop()
+            self._fade_timer.deleteLater()
+        self._fade_timer = QtCore.QTimer(self)
+        interval_ms = 50
+        total = float(max(1, duration_ms))
+        intensity_range = end_intensity - start_intensity
+        self._fade_step = (interval_ms / total) * intensity_range
+        # Используем замыкание для передачи end_intensity и callback
+        def update_progress():
+            self._update_fade_progress(end_intensity, on_complete=self._on_stage3_complete)
+        self._fade_timer.timeout.connect(update_progress)
+        self._fade_timer.start(interval_ms)
+    
+    def _update_fade_progress(self, target_intensity: float, on_complete: Optional[Callable[[], None]] = None) -> None:
+        """Обновляет прогресс анимации до целевой интенсивности"""
+        if self._fade_step > 0:
+            self._fade_progress = min(target_intensity, self._fade_progress + self._fade_step)
+        elif self._fade_step < 0:
+            self._fade_progress = max(target_intensity, self._fade_progress + self._fade_step)
+        
+        # Ограничиваем значение в допустимом диапазоне
+        self._fade_progress = max(0.0, min(1.0, self._fade_progress))
+        
+        # Проверяем, достигли ли мы целевой интенсивности
+        if abs(self._fade_progress - target_intensity) < abs(self._fade_step) or \
+           (self._fade_step > 0 and self._fade_progress >= target_intensity) or \
+           (self._fade_step < 0 and self._fade_progress <= target_intensity):
+            self._fade_progress = target_intensity
+            if self._fade_timer:
+                self._fade_timer.stop()
+                self._fade_timer.deleteLater()
+                self._fade_timer = None
+            if on_complete:
+                on_complete()
+    
+    def _show_finish_button(self) -> None:
+        """Показывает кнопку 'Слезть' после задержки в первом этапе"""
+        if self._current_stage == 1:
+            self._update_uporotsya_button_icon(start=False)
+    
+    def _show_impossible_and_start_stage3(self) -> None:
+        """Показывает надпись 'Невозможно' и запускает третий этап"""
+        if self._current_stage == 2:
+            # Скрываем кнопку "слезть" перед показом надписи "невозможно"
+            if hasattr(self, "buttonUport") and self.buttonUport:
+                self.buttonUport.hide()
+            self._show_impossible_message()
+            self._current_stage = 3
+            self._start_stage3_animation()
+    
+    def _on_stage3_complete(self) -> None:
+        """Вызывается после завершения третьего этапа, показывает экран смерти"""
+        if self._fade_progress >= 1.0:
+            self._show_death_screen()
 
     def _stop_face_fade(self, reset_progress: bool = False) -> None:
         if self._fade_timer:
             self._fade_timer.stop()
             self._fade_timer.deleteLater()
             self._fade_timer = None
+        if self._stage1_timer:
+            self._stage1_timer.stop()
+            self._stage1_timer.deleteLater()
+            self._stage1_timer = None
+        if self._stage2_timer:
+            self._stage2_timer.stop()
+            self._stage2_timer.deleteLater()
+            self._stage2_timer = None
         if reset_progress:
-            self._fade_progress = 0.0
+            # Сбрасываем на стартовую интенсивность первого этапа
+            stage1_config = self._animation_stages.get("stage1", {})
+            start_intensity = max(0.0, min(1.0, stage1_config.get("start_intensity", 0.0)))
+            self._fade_progress = start_intensity
+            self._current_stage = 0
 
     def _show_impossible_message(self) -> None:
         if hasattr(self, "buttonUport") and self.buttonUport:
@@ -886,7 +1099,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.messageLabel.show()
         self._position_impossible_label()
         self.messageLabel.raise_()
-        QtCore.QTimer.singleShot(int(self.impossible_delay_ms), self._show_death_screen)
+        # Экран смерти теперь показывается после завершения третьего этапа
 
     def _show_death_screen(self) -> None:
         self.messageLabel.hide()

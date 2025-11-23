@@ -1,0 +1,29 @@
+{
+  "animation_stages": {
+    "stage1": {
+      "duration_ms": 5000,
+      "start_intensity": 0.0,
+      "end_intensity": 0.4,
+      "show_finish_button_delay_ms": 4000
+    },
+    "stage2": {
+      "duration_ms": 3000,
+      "start_intensity": 0.4,
+      "end_intensity": 0.7,
+      "show_impossible_delay_ms": 4000
+    },
+    "stage3": {
+      "duration_ms": 3000,
+      "start_intensity": 0.7,
+      "end_intensity": 1.0
+    }
+  },
+  "_comment": {
+    "animation_stages": {
+      "stage1": "Первый этап: анимация от start_intensity до end_intensity за duration_ms. show_finish_button_delay_ms - задержка перед показом кнопки 'Слезть'",
+      "stage2": "Второй этап: запускается после нажатия на кнопку 'Слезть'. show_impossible_delay_ms - задержка перед показом надписи 'Невозможно'",
+      "stage3": "Третий этап: запускается после появления надписи 'Невозможно'. После достижения end_intensity показывается экран смерти"
+    }
+  }
+}
+
