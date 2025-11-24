@@ -44,16 +44,18 @@ To build the dedicated AR interface, point the helper script at the alternate sp
 
 ```powershell
 conda activate visomaster
-python scripts/build_dist.py --clean --spec installer/visomaster_ar.spec --dist-dir VisoMasterAR
+python scripts/build_dist.py --clean --spec installer/visomaster_ar.spec --dist-dir ARFaceEffect
 ```
 
-This produces `dist/VisoMasterAR/VisoMasterAR.exe`, which launches `ARSmokingWindow`.
+This produces `dist/ARFaceEffect/ARFaceEffect.exe`, which launches `ARSmokingWindow`.
 
-**Important**: The `model_assets` folder is **excluded** from the build to reduce size. You must manually copy it to `dist/VisoMasterAR/model_assets/` after building:
-
-```powershell
-Copy-Item -Path "model_assets" -Destination "dist\VisoMasterAR\model_assets" -Recurse
-```
+**Important files that are excluded from the build** (to allow editing after build):
+- The `model_assets` folder is **excluded** from the build to reduce size. You must manually copy it to `dist/ARFaceEffect/model_assets/` after building:
+  ```powershell
+  Copy-Item -Path "model_assets" -Destination "dist\ARFaceEffect\model_assets" -Recurse
+  ```
+- The `animation_config.json` file is **automatically copied** to the dist root (next to exe) during build, so you can edit it after building.
+- The `assets/images/` folder is included in the build, but you can also place images (like `old_face.jpg`) in `dist/ARFaceEffect/assets/images/` after building - the application will use files from there if they exist.
 
 ## 3. Create the Windows Installer
 
@@ -99,7 +101,11 @@ Make sure these assets are up to date before rebuilding. If you add new data fil
   - If errors persist, ensure the DLL files are in `dependencies/` and rebuild.
 
 - **Missing model_assets errors**:
-  - Remember that `model_assets` is excluded from the build. Copy it manually to `dist/VisoMasterAR/model_assets/` after building.
+  - Remember that `model_assets` is excluded from the build. Copy it manually to `dist/ARFaceEffect/model_assets/` after building.
+
+- **Editing configuration and images after build**:
+  - `animation_config.json` is automatically copied to the dist root during build. You can edit it directly in `dist/ARFaceEffect/animation_config.json`.
+  - To change the face image (`old_face.jpg`), place it in `dist/ARFaceEffect/assets/images/old_face.jpg` - it will be used instead of the one in `_internal`.
 
 - **PyInstaller module errors**:
   - If PyInstaller fails due to missing modules, add them to the `hiddenimports` list in `installer/visomaster.spec`.
@@ -109,5 +115,5 @@ Make sure these assets are up to date before rebuilding. If you add new data fil
   - Use `python scripts/build_dist.py --pyinstaller <path-to-pyinstaller>` to point to a custom PyInstaller executable if the default is unavailable.
 
 - **Build script preserves model_assets**:
-  - When using `--clean`, the build script will preserve `model_assets` in `dist/VisoMasterAR/` if it exists, so you don't need to re-copy it after each rebuild.
+  - When using `--clean`, the build script will preserve `model_assets` in `dist/ARFaceEffect/` if it exists, so you don't need to re-copy it after each rebuild.
 

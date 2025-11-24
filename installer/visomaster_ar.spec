@@ -24,7 +24,7 @@ datas += [
     # model_assets исключён из сборки - должен быть размещён рядом с exe
     (str(project_root / "dependencies"), "dependencies"),
     (str(project_root / "assets"), "assets"),
-    (str(project_root / "animation_config.json"), "."),
+    # animation_config.json исключён из сборки - должен быть размещён рядом с exe для редактирования
     (str(project_root / "LICENSE"), "."),
     (str(project_root / "README.md"), "."),
 ]
@@ -80,7 +80,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="VisoMasterAR",
+    name="ARFaceEffect",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -102,6 +102,6 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="VisoMasterAR",
+    name="ARFaceEffect",
 )
 

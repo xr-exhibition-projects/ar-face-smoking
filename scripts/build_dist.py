@@ -48,14 +48,14 @@ def clean_directories(root: Path) -> None:
     if build_path.exists():
         shutil.rmtree(build_path)
     
-    # Очищаем dist, но сохраняем model_assets в VisoMasterAR если он есть
+    # Очищаем dist, но сохраняем model_assets в ARFaceEffect если он есть
     dist_path = root / "dist"
     if dist_path.exists():
-        visomaster_ar_path = dist_path / "VisoMasterAR"
-        if visomaster_ar_path.exists():
+        ar_face_effect_path = dist_path / "ARFaceEffect"
+        if ar_face_effect_path.exists():
             # Сохраняем model_assets если он существует
             model_assets_backup = None
-            model_assets_path = visomaster_ar_path / "model_assets"
+            model_assets_path = ar_face_effect_path / "model_assets"
             if model_assets_path.exists():
                 # Создаем временную копию
                 backup_path = root / ".model_assets_backup"
@@ -64,16 +64,16 @@ def clean_directories(root: Path) -> None:
                 shutil.copytree(model_assets_path, backup_path)
                 model_assets_backup = backup_path
             
-            # Удаляем VisoMasterAR
-            shutil.rmtree(visomaster_ar_path)
+            # Удаляем ARFaceEffect
+            shutil.rmtree(ar_face_effect_path)
             
             # Восстанавливаем model_assets если был
             if model_assets_backup is not None:
-                visomaster_ar_path.mkdir(parents=True, exist_ok=True)
+                ar_face_effect_path.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(model_assets_backup, model_assets_path)
                 shutil.rmtree(model_assets_backup)
         else:
-            # Если нет VisoMasterAR, удаляем весь dist
+            # Если нет ARFaceEffect, удаляем весь dist
             shutil.rmtree(dist_path)
 
 
@@ -109,6 +109,15 @@ def copy_tensorrt_dlls(dist_dir: Path, project_root: Path) -> None:
         print(f"Copied TensorRT DLLs to dist root: {', '.join(copied)}")
 
 
+def copy_animation_config(dist_dir: Path, project_root: Path) -> None:
+    """Копирует animation_config.json в корень сборки (рядом с exe) для редактирования."""
+    config_src = project_root / "animation_config.json"
+    if config_src.exists():
+        config_dst = dist_dir / "animation_config.json"
+        shutil.copy2(config_src, config_dst)
+        print(f"Copied animation_config.json to dist root")
+
+
 def main() -> None:
     args = parse_args()
     project_root = Path(__file__).resolve().parents[1]
@@ -128,13 +137,16 @@ def main() -> None:
     else:
         # Guess dist folder name from spec file name
         if "ar" in spec_path.stem.lower():
-            dist_name = "VisoMasterAR"
+            dist_name = "ARFaceEffect"
         else:
             dist_name = "VisoMaster"
         dist_dir = project_root / "dist" / dist_name
     
     # Копируем DLL TensorRT в корень сборки (рядом с exe)
     copy_tensorrt_dlls(dist_dir, project_root)
+    
+    # Копируем animation_config.json в корень сборки (рядом с exe)
+    copy_animation_config(dist_dir, project_root)
     
     print(f"\nBuild finished. Distributable folder: {dist_dir}")
 
