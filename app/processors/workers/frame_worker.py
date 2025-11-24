@@ -642,7 +642,6 @@ class FrameWorker(threading.Thread):
                 if alpha==0:
                     alpha=1
 
-                # Blend the images
                 prev_face = torch.mul(prev_face, 255)
                 prev_face = torch.clamp(prev_face, 0, 255)
                 prev_face = prev_face.permute(2, 0, 1)
@@ -650,6 +649,28 @@ class FrameWorker(threading.Thread):
                 swap = torch.mul(swap, alpha)
                 prev_face = torch.mul(prev_face, 1-alpha)
                 swap = torch.add(swap, prev_face)
+
+        zombie_texture = parameters.get("TextureStrengthSlider", 0)
+        zombie_color = parameters.get("ColorStrengthSlider", 0)
+        if zombie_texture > 0 or zombie_color > 0:
+            ref_data = self.models_processor.get_reference_image()
+            if ref_data is not None:
+                try:
+                    from app.processors.utils import texture_transfer
+                    ref_img, ref_kps = ref_data
+                    swap_small = t128(swap)
+                    aligned = texture_transfer.align_reference_to_target(ref_img, ref_kps, target_size=128)
+                    if zombie_color > 0:
+                        swap_small = texture_transfer.transfer_color_reinhard(
+                            aligned, swap_small, strength=zombie_color / 100.0
+                        )
+                    if zombie_texture > 0:
+                        swap_small = texture_transfer.transfer_texture_highpass(
+                            aligned, swap_small, strength=zombie_texture / 100.0
+                        )
+                    swap = t512(swap_small)
+                except Exception as exc:
+                    print(f"Zombie texture transfer failed: {exc}")
 
         border_mask = self.get_border_mask(parameters)
 

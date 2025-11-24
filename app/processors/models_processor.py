@@ -3,7 +3,8 @@ import os
 import subprocess as sp
 import gc
 import traceback
-from typing import Dict, TYPE_CHECKING
+from typing import Dict, TYPE_CHECKING, Optional, Tuple
+from pathlib import Path
 
 from packaging import version
 import numpy as np
@@ -12,6 +13,7 @@ import torch
 import onnx
 from torchvision.transforms import v2
 from PySide6 import QtCore
+import cv2
 try:
     import tensorrt as trt
     TENSORRT_AVAILABLE = True
@@ -67,6 +69,9 @@ class ModelsProcessor(QtCore.QObject):
         ]       
         self.nThreads = 2
         self.syncvec = torch.empty((1, 1), dtype=torch.float32, device=self.device)
+        self._reference_image_cache: Optional[Tuple[torch.Tensor, np.ndarray]] = None
+        self._reference_image_path: Optional[Path] = None
+        self._reference_image_mtime: Optional[float] = None
 
         # Initialize models and models_path
         self.models: Dict[str, onnxruntime.InferenceSession] = {}
@@ -275,6 +280,85 @@ class ModelsProcessor(QtCore.QObject):
         self.delete_models_dfm()
         self.delete_models_trt()
         torch.cuda.empty_cache()
+        self._reference_image_cache = None
+        self._reference_image_path = None
+        self._reference_image_mtime = None
+
+    def _find_reference_image_path(self) -> Optional[Path]:
+        base = Path(os.getcwd())
+        candidates = [
+            base / "reference_images",
+            base / "assets" / "reference_images",
+            base / "model_assets" / "reference_images",
+            base / "_internal" / "reference_images",
+        ]
+        exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+
+        for root in candidates:
+            if not root.exists():
+                continue
+            if root.is_file() and root.suffix.lower() in exts:
+                return root
+            if root.is_dir():
+                for file in sorted(root.iterdir()):
+                    if file.is_file() and file.suffix.lower() in exts:
+                        return file
+        return None
+
+    def get_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:
+        """Return cached reference image tensor and landmarks for texture transfer."""
+        ref_path = self._find_reference_image_path()
+        if ref_path is None:
+            self._reference_image_cache = None
+            self._reference_image_path = None
+            return None
+
+        mtime = ref_path.stat().st_mtime
+        if (
+            self._reference_image_cache is not None
+            and self._reference_image_path == ref_path
+            and self._reference_image_mtime == mtime
+        ):
+            return self._reference_image_cache
+
+        try:
+            from app.processors.utils import texture_transfer
+        except Exception as exc:  # pragma: no cover
+            print(f"Failed to import texture_transfer: {exc}")
+            return None
+
+        tensor = texture_transfer.load_reference_image(ref_path, self.device)
+        if tensor is None:
+            self._reference_image_cache = None
+            self._reference_image_path = None
+            return None
+
+        try:
+            _, kps_5, _ = self.run_detect(
+                tensor,
+                detect_mode='RetinaFace',
+                max_num=1,
+                score=0.5,
+                input_size=(512, 512),
+                use_landmark_detection=True,
+                landmark_detect_mode='5',
+                landmark_score=0.5,
+            )
+            if kps_5 is None or len(kps_5) == 0:
+                print("Reference image: no face detected")
+                self._reference_image_cache = None
+                self._reference_image_path = None
+                return None
+            ref_kps = np.array(kps_5[0])
+            self._reference_image_cache = (tensor, ref_kps)
+            self._reference_image_path = ref_path
+            self._reference_image_mtime = mtime
+            return self._reference_image_cache
+        except Exception as exc:  # pragma: no cover
+            print(f"Failed to process reference image: {exc}")
+            self._reference_image_cache = None
+            self._reference_image_path = None
+            return None
 
 
     def load_inswapper_iss_emap(self, model_name):

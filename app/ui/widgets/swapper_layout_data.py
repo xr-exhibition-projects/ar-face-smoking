@@ -1051,6 +1051,26 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'help': 'Adjust the JPEG Compression amount'
         }
     },
+    'Zombie Texture': {
+        'TextureStrengthSlider': {
+            'level': 1,
+            'label': 'Texture Strength',
+            'min_value': '0',
+            'max_value': '200',
+            'default': '100',
+            'step': 5,
+            'help': 'Adjust how strongly the zombie overlay texture is blended.'
+        },
+        'ColorStrengthSlider': {
+            'level': 1,
+            'label': 'Color Strength',
+            'min_value': '0',
+            'max_value': '200',
+            'default': '100',
+            'step': 5,
+            'help': 'Control how much of the reference color palette is transferred (values above 100 overdrive the tint).'
+        }
+    },
     'Blend Adjustments':{
         'FinalBlendAdjEnableToggle': {
             'level': 1,
