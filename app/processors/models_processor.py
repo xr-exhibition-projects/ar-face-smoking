@@ -285,15 +285,41 @@ class ModelsProcessor(QtCore.QObject):
         self._reference_image_mtime = None
 
     def _find_reference_image_path(self) -> Optional[Path]:
-        base = Path(os.getcwd())
+        """Ищет reference image для zombie texture в assets/images."""
+        import sys
+        
+        # Определяем базовый путь
+        if getattr(sys, "frozen", False):
+            # Для frozen приложений ищем рядом с exe
+            base = Path(sys.executable).parent
+        else:
+            # Для обычного запуска используем корень проекта
+            base = Path(__file__).resolve().parents[2]
+        
+        # Приоритетные пути для поиска
         candidates = [
+            base / "assets" / "images",  # Новое расположение
+            base / "_internal" / "assets" / "images",  # Для frozen приложений
+            # Старые пути для обратной совместимости
             base / "reference_images",
             base / "assets" / "reference_images",
             base / "model_assets" / "reference_images",
             base / "_internal" / "reference_images",
         ]
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-
+        
+        # Сначала ищем файлы с именами reference.*
+        reference_names = ["reference", "reference_image", "zombie_texture", "second_face"]
+        for root in candidates:
+            if not root.exists() or not root.is_dir():
+                continue
+            for ref_name in reference_names:
+                for ext in exts:
+                    ref_file = root / f"{ref_name}{ext}"
+                    if ref_file.exists() and ref_file.is_file():
+                        return ref_file
+        
+        # Если не нашли по имени, ищем любой подходящий файл изображения
         for root in candidates:
             if not root.exists():
                 continue
@@ -302,6 +328,9 @@ class ModelsProcessor(QtCore.QObject):
             if root.is_dir():
                 for file in sorted(root.iterdir()):
                     if file.is_file() and file.suffix.lower() in exts:
+                        # Пропускаем old_face.jpg, так как это первое лицо
+                        if file.name.lower() in ("old_face.jpg", "old_face.png", "old_face.jpeg"):
+                            continue
                         return file
         return None
 

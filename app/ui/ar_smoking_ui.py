@@ -109,14 +109,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.control_window: Optional[ControlOptionsWindow] = None
         
         # Animation stage tracking
-        self._current_stage: int = 0  # 0 = not started, 1 = stage1, 2 = stage2, 3 = stage3
+        self._current_stage: int = 0  # 0 = not started, 1 = stage1, 2 = stage2
         self._stage1_timer: Optional[QtCore.QTimer] = None
-        self._stage2_timer: Optional[QtCore.QTimer] = None
         
         # Load animation config
         self._animation_config = self._load_animation_config()
         self._animation_stages = self._animation_config.get("animation_stages", {})
-        self._death_delay_ms = int(self._animation_config.get("death_screen_delay_ms", 5000))
         self._death_delay_timer: Optional[QtCore.QTimer] = None
 
         self.setWindowTitle("AR Smoking UI")
@@ -385,26 +383,24 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _load_animation_config(self) -> dict:
         """Загружает конфигурацию анимации из JSON файла."""
         default_config = {
-            "animation_stages": {
+            "timings": {
                 "stage1": {
-                    "duration_ms": 5000,
-                    "start_intensity": 0.0,
-                    "end_intensity": 0.4,
-                    "show_finish_button_delay_ms": 4000,
+                    "show_finish_button_delay_ms": 5000,
                 },
                 "stage2": {
-                    "duration_ms": 3000,
-                    "start_intensity": 0.4,
-                    "end_intensity": 0.7,
-                    "show_impossible_delay_ms": 4000,
+                    "duration_ms": 5000,
                 },
-                "stage3": {
-                    "duration_ms": 3000,
-                    "start_intensity": 0.7,
+            },
+            "animation_stages": {
+                "stage1": {
+                    "start_intensity": 0.0,
+                    "end_intensity": 0.4,
+                },
+                "stage2": {
+                    "start_intensity": 0.4,
                     "end_intensity": 1.0,
                 },
             },
-            "death_screen_delay_ms": 5000,
             "zombie_overlay": {
                 "stage1": {
                     "color_start": 0.0,
@@ -413,12 +409,6 @@ class ARSmokingWindow(main_ui.MainWindow):
                     "texture_end": 0.0,
                 },
                 "stage2": {
-                    "color_start": 0.0,
-                    "color_end": 0.5,
-                    "texture_start": 0.0,
-                    "texture_end": 0.5,
-                },
-                "stage3": {
                     "color_start": 0.5,
                     "color_end": 0.8,
                     "texture_start": 0.5,
@@ -460,8 +450,22 @@ class ARSmokingWindow(main_ui.MainWindow):
                     for key, value in stage_defaults.items():
                         stage_cfg.setdefault(key, value)
 
-            if "death_screen_delay_ms" not in config:
-                config["death_screen_delay_ms"] = default_config["death_screen_delay_ms"]
+            if "timings" not in config:
+                config["timings"] = default_config["timings"]
+            else:
+                # Валидация timings
+                timings_default = default_config.get("timings", {})
+                for key, value in timings_default.items():
+                    if key in ("stage1", "stage2"):
+                        # stage1 и stage2 - это объекты с параметрами
+                        if key not in config["timings"]:
+                            config["timings"][key] = value
+                        else:
+                            for subkey, subvalue in value.items():
+                                config["timings"][key].setdefault(subkey, subvalue)
+                    else:
+                        # Остальные тайминги (death_screen_delay_ms и т.д.)
+                        config["timings"].setdefault(key, value)
 
             if "zombie_overlay" not in config:
                 config["zombie_overlay"] = default_config["zombie_overlay"]
@@ -710,17 +714,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self._current_stage != 1:
             return
 
-        # Переход сразу ко второму и третьему этапу (мгновенно показываем "Невозможно")
+        # Переход сразу ко второму этапу (мгновенно показываем "Невозможно")
         self._second_press_triggered = True
         self._current_stage = 2
         self._stop_face_fade()
-        self._start_stage2_animation()
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
         self._show_impossible_message()
-        self._current_stage = 3
-        self._start_stage3_animation()
-        self._start_death_delay_timer()
+        self._start_stage2_animation()
 
     def _reset_swap_state(self) -> None:
         self._swap_active = False
@@ -1028,8 +1029,11 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage_config = self._animation_stages.get("stage1", {})
         start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.0)))
         end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 0.4)))
-        duration_ms = stage_config.get("duration_ms", 5000)
-        show_button_delay = stage_config.get("show_finish_button_delay_ms", 4000)
+        timings = self._animation_config.get("timings", {})
+        stage1_timings = timings.get("stage1", {})
+        show_button_delay = stage1_timings.get("show_finish_button_delay_ms", 5000)
+        # Используем show_finish_button_delay_ms как длительность анимации
+        duration_ms = show_button_delay
         
         self._fade_progress = start_intensity
         self._start_fade_timer(end_intensity, duration_ms)
@@ -1044,34 +1048,16 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._stage1_timer.start(show_button_delay)
     
     def _start_stage2_animation(self) -> None:
-        """Запускает второй этап анимации: 0.4 -> 0.7"""
+        """Запускает второй этап анимации: от надписи 'Невозможно' до финала."""
         stage_config = self._animation_stages.get("stage2", {})
-        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.4)))
-        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 0.7)))
-        duration_ms = stage_config.get("duration_ms", 3000)
-        show_impossible_delay = stage_config.get("show_impossible_delay_ms", 4000)
-        
-        self._fade_progress = start_intensity
-        self._start_fade_timer(end_intensity, duration_ms)
-        
-        # Запускаем таймер для показа надписи "невозможно"
-        if self._stage2_timer:
-            self._stage2_timer.stop()
-            self._stage2_timer.deleteLater()
-        self._stage2_timer = QtCore.QTimer(self)
-        self._stage2_timer.setSingleShot(True)
-        self._stage2_timer.timeout.connect(self._show_impossible_and_start_stage3)
-        self._stage2_timer.start(show_impossible_delay)
-    
-    def _start_stage3_animation(self) -> None:
-        """Запускает третий этап анимации: 0.7 -> 1.0"""
-        stage_config = self._animation_stages.get("stage3", {})
-        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.7)))
+        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.9)))
         end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 1.0)))
-        duration_ms = stage_config.get("duration_ms", 3000)
+        timings = self._animation_config.get("timings", {})
+        stage2_timings = timings.get("stage2", {})
+        duration_ms = stage2_timings.get("duration_ms", 5000)
         
         self._fade_progress = start_intensity
-        self._start_fade_timer(end_intensity, duration_ms, on_complete=self._on_stage3_complete)
+        self._start_fade_timer(end_intensity, duration_ms, on_complete=self._on_stage2_complete)
 
     def _start_fade_timer(self, target_intensity: float, duration_ms: int, on_complete: Optional[Callable[[], None]] = None) -> None:
         if self._fade_timer:
@@ -1136,22 +1122,11 @@ class ARSmokingWindow(main_ui.MainWindow):
             if hasattr(self, "buttonUport") and self.buttonUport:
                 self.buttonUport.show()
     
-    def _show_impossible_and_start_stage3(self) -> None:
-        """Показывает надпись 'Невозможно' и запускает третий этап"""
+    def _on_stage2_complete(self) -> None:
+        """Вызывается после завершения второго этапа - сразу показывает экран смерти"""
         if self._current_stage == 2:
-            # Скрываем кнопку "слезть" перед показом надписи "невозможно"
-            if hasattr(self, "buttonUport") and self.buttonUport:
-                self.buttonUport.hide()
-            self._show_impossible_message()
-            self._current_stage = 3
-            self._start_stage3_animation()
-            self._start_death_delay_timer()
+            self._show_death_screen()
     
-    def _on_stage3_complete(self) -> None:
-        """Вызывается после завершения третьего этапа (экран смерти запускается отдельным таймером)"""
-        if self._fade_progress >= 1.0:
-            return
-
     def _stop_face_fade(self, reset_progress: bool = False) -> None:
         if self._fade_timer:
             self._fade_timer.stop()
@@ -1161,10 +1136,6 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._stage1_timer.stop()
             self._stage1_timer.deleteLater()
             self._stage1_timer = None
-        if self._stage2_timer:
-            self._stage2_timer.stop()
-            self._stage2_timer.deleteLater()
-            self._stage2_timer = None
         self._cancel_death_delay_timer()
         if reset_progress:
             # Сбрасываем на стартовую интенсивность первого этапа
@@ -1186,7 +1157,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.messageLabel.show()
         self._position_impossible_label()
         self.messageLabel.raise_()
-        # Экран смерти теперь показывается после завершения третьего этапа
+        # Экран смерти появится после завершения анимации stage2
         if self.mediaToggleButton:
             self.mediaToggleButton.hide()
 

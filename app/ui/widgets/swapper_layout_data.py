@@ -721,7 +721,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Eyes Feather Blend',
             'min_value': '1',
             'max_value': '100',
-            'default': '100',
+            'default': '30',
             'step': 1,
             'parentToggle': 'RestoreEyesEnableToggle',
             'requiredToggleValue': True,
@@ -817,7 +817,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Mouth Feather Blend',
             'min_value': '1',
             'max_value': '100',
-            'default': '87',
+            'default': '30',
             'step': 1,
             'parentToggle': 'RestoreMouthEnableToggle',
             'requiredToggleValue': True,
@@ -912,7 +912,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'ColorEnableToggle': {
             'level': 1,
             'label': 'Color Adjustments',
-            'default': False,
+            'default': True,
             'help': 'Fine-tune the RGB color values of the swap.'
         },
         'ColorRedSlider': {
@@ -920,7 +920,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Red',
             'min_value': '-100',
             'max_value': '100',
-            'default': '0',
+            'default': '10',
             'step': 1,
             'parentToggle': 'ColorEnableToggle',
             'requiredToggleValue': True,
