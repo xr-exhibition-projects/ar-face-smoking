@@ -340,7 +340,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'OccluderEnableToggle': {
             'level': 1,
             'label': 'Occlusion Mask',
-            'default': False,
+            'default': True,
             'help': 'Allow objects occluding the face to show up in the swapped image.'
         },
         'OccluderSizeSlider': {

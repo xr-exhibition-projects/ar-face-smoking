@@ -658,17 +658,20 @@ class FrameWorker(threading.Thread):
                 try:
                     from app.processors.utils import texture_transfer
                     ref_img, ref_kps = ref_data
-                    swap_small = t128(swap)
-                    aligned = texture_transfer.align_reference_to_target(ref_img, ref_kps, target_size=128)
+                    texture_canvas = swap.clone()
+                    target_size = int(texture_canvas.shape[-1])
+                    aligned = texture_transfer.align_reference_to_target(
+                        ref_img, ref_kps, target_size=target_size
+                    )
                     if zombie_color > 0:
-                        swap_small = texture_transfer.transfer_color_reinhard(
-                            aligned, swap_small, strength=zombie_color / 100.0
+                        texture_canvas = texture_transfer.transfer_color_reinhard(
+                            aligned, texture_canvas, strength=zombie_color / 100.0
                         )
                     if zombie_texture > 0:
-                        swap_small = texture_transfer.transfer_texture_highpass(
-                            aligned, swap_small, strength=zombie_texture / 100.0
+                        texture_canvas = texture_transfer.transfer_texture_highpass(
+                            aligned, texture_canvas, strength=zombie_texture / 100.0
                         )
-                    swap = t512(swap_small)
+                    swap = texture_canvas
                 except Exception as exc:
                     print(f"Zombie texture transfer failed: {exc}")
 
