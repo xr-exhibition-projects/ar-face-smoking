@@ -15,7 +15,12 @@ lock = threading.Lock()
 image_extensions = ('.jpg', '.jpeg', '.jpe', '.png', '.webp', '.tif', '.tiff', '.jp2', '.exr', '.hdr', '.ras', '.pnm', '.ppm', '.pgm', '.pbm', '.pfm')
 video_extensions = ('.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.gif')
 
-DFM_MODELS_PATH = './model_assets/dfm_models'
+# Определяем путь к dfm_models
+# Используем переменную окружения, если она установлена (для frozen приложений)
+DFM_MODELS_PATH = os.environ.get('VISOMASTER_MODELS_DIR', './model_assets')
+if not DFM_MODELS_PATH.endswith('/dfm_models') and not DFM_MODELS_PATH.endswith('\\dfm_models'):
+    DFM_MODELS_PATH = os.path.join(DFM_MODELS_PATH, 'dfm_models')
+DFM_MODELS_PATH = os.path.normpath(DFM_MODELS_PATH)
 
 DFM_MODELS_DATA = {}
 

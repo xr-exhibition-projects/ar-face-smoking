@@ -4,12 +4,13 @@ This document explains how to produce a standalone build of **VisoMaster** and w
 
 ## 1. Prepare the Environment
 
-1. Create and activate the existing Conda environment (see `README.md` for details) or any Python 3.10+ virtual environment.
-2. Install the runtime dependencies:
+1. **Activate the Conda environment** (required for proper dependency resolution):
    ```powershell
-   pip install -r requirements_cu124.txt
+   conda activate visomaster
    ```
-3. Install the build-only tools:
+   Make sure you have the `visomaster` conda environment set up as described in `README.md`.
+
+2. Install the build-only tools (if not already installed):
    ```powershell
    pip install pyinstaller
    ```
@@ -20,13 +21,16 @@ This document explains how to produce a standalone build of **VisoMaster** and w
 Run the helper script which wraps `pyinstaller` and uses the supplied spec file:
 
 ```powershell
+conda activate visomaster
 python scripts/build_dist.py --clean
 ```
 
 The script:
 - Clears previous `build/` and `dist/` folders when `--clean` is provided.
+- **Preserves `model_assets`** in `dist/VisoMasterAR/` if it exists (won't be deleted during cleanup).
 - Invokes PyInstaller with `installer/visomaster.spec`.
 - Produces the distributable folder at `dist/VisoMaster/`.
+- **Automatically copies TensorRT DLL files** from `dependencies/` to the dist root (next to the exe).
 
 You can verify the build by launching:
 
@@ -39,10 +43,17 @@ dist\VisoMaster\VisoMaster.exe
 To build the dedicated AR interface, point the helper script at the alternate spec:
 
 ```powershell
+conda activate visomaster
 python scripts/build_dist.py --clean --spec installer/visomaster_ar.spec --dist-dir VisoMasterAR
 ```
 
 This produces `dist/VisoMasterAR/VisoMasterAR.exe`, which launches `ARSmokingWindow`.
+
+**Important**: The `model_assets` folder is **excluded** from the build to reduce size. You must manually copy it to `dist/VisoMasterAR/model_assets/` after building:
+
+```powershell
+Copy-Item -Path "model_assets" -Destination "dist\VisoMasterAR\model_assets" -Recurse
+```
 
 ## 3. Create the Windows Installer
 
@@ -57,17 +68,46 @@ The installer executable will be generated in `installer/output/VisoMaster_Setup
 
 PyInstaller bundles the following directories and files:
 
-- `app/`
-- `model_assets/`
-- `dependencies/`
-- `images/`
+- `app/` (all application code)
+- `dependencies/` (DLL files and other dependencies)
+- `assets/` (UI images, videos, etc.)
+- `animation_config.json` (animation configuration)
 - `README.md`, `LICENSE`
+
+**Note**: The `model_assets/` folder is **excluded** from the build to reduce executable size. You must place it manually in the dist folder:
+
+```powershell
+# After building, copy model_assets to the dist folder
+Copy-Item -Path "model_assets" -Destination "dist\VisoMasterAR\model_assets" -Recurse
+```
+
+The build script automatically:
+- Copies TensorRT DLL files (`nvinfer_10.dll`, `nvinfer_builder_resource_10.dll`, `nvinfer_plugin_10.dll`, `nvonnxparser_10.dll`) from `dependencies/` to the dist root (next to the exe).
+- Preserves `model_assets` in `dist/VisoMasterAR/` during cleanup (won't be deleted when using `--clean`).
 
 Make sure these assets are up to date before rebuilding. If you add new data files at runtime, include them either by updating `installer/visomaster.spec` or copying them manually into `dist/VisoMaster/` prior to running Inno Setup.
 
 ## 5. Troubleshooting
 
-- **DLL load errors** when launching the packaged build usually mean `dependencies/` is missing required binaries. Re-run the build script and ensure the folder exists before packaging.
-- If PyInstaller fails due to missing modules, add them to the `hiddenimports` list in `installer/visomaster.spec`.
-- Use `python scripts/build_dist.py --pyinstaller <path-to-pyinstaller>` to point to a custom PyInstaller executable if the default is unavailable.
+- **DLL load errors** when launching the packaged build:
+  - Ensure TensorRT DLL files are present in `dependencies/` before building (they will be automatically copied to the dist root).
+  - Make sure you're building with the `visomaster` conda environment activated.
+  - Check that `dependencies/` folder exists and contains all required DLL files.
+
+- **TensorRT import errors**:
+  - TensorRT DLL files are automatically copied to the dist root during build. They should be next to the exe file.
+  - If errors persist, ensure the DLL files are in `dependencies/` and rebuild.
+
+- **Missing model_assets errors**:
+  - Remember that `model_assets` is excluded from the build. Copy it manually to `dist/VisoMasterAR/model_assets/` after building.
+
+- **PyInstaller module errors**:
+  - If PyInstaller fails due to missing modules, add them to the `hiddenimports` list in `installer/visomaster.spec`.
+  - Make sure you're using the correct conda environment (`conda activate visomaster`).
+
+- **Custom PyInstaller**:
+  - Use `python scripts/build_dist.py --pyinstaller <path-to-pyinstaller>` to point to a custom PyInstaller executable if the default is unavailable.
+
+- **Build script preserves model_assets**:
+  - When using `--clean`, the build script will preserve `model_assets` in `dist/VisoMasterAR/` if it exists, so you don't need to re-copy it after each rebuild.
 

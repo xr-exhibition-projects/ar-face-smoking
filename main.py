@@ -12,8 +12,12 @@ from app.ui.core.proxy_style import ProxyStyle
 
 
 def _resolve_base_path() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
+    """Определяет базовый путь для frozen приложения или обычного запуска.
+    Для frozen приложения возвращает папку с exe, а не временную папку PyInstaller.
+    """
+    if getattr(sys, "frozen", False):
+        # Для frozen приложения возвращаем папку с exe
+        return Path(sys.executable).parent
     return Path(__file__).resolve().parent
 
 
@@ -37,14 +41,42 @@ def _prepare_environment() -> None:
 
 def main() -> None:
     _prepare_environment()
+    base_path = _resolve_base_path()
 
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle(ProxyStyle())
 
-    style_path = Path("app/ui/styles/dark_styles.qss")
-    with style_path.open("r", encoding="utf-8") as f:
-        _style = f.read()
-    _style = qdarktheme.load_stylesheet(custom_colors={"primary": "#4facc9"}) + "\n" + _style
+    # Загружаем стили - если файл не найден, используем только qdarktheme
+    _style = qdarktheme.load_stylesheet(custom_colors={"primary": "#4facc9"})
+    
+    # Пробуем загрузить дополнительные стили из файла (опционально)
+    possible_paths = []
+    if getattr(sys, "frozen", False):
+        possible_paths = [
+            base_path / "_internal" / "app" / "ui" / "styles" / "dark_styles.qss",
+            base_path / "app" / "ui" / "styles" / "dark_styles.qss",
+        ]
+    else:
+        possible_paths = [
+            base_path / "app" / "ui" / "styles" / "dark_styles.qss",
+            base_path / "_internal" / "app" / "ui" / "styles" / "dark_styles.qss",
+        ]
+    
+    style_path = None
+    for path in possible_paths:
+        if path.exists():
+            style_path = path
+            break
+    
+    if style_path is not None:
+        try:
+            with style_path.open("r", encoding="utf-8") as f:
+                custom_style = f.read()
+            _style = _style + "\n" + custom_style
+        except Exception:
+            # Если не удалось загрузить дополнительные стили, используем только qdarktheme
+            pass
+    
     app.setStyleSheet(_style)
 
     window = ar_smoking_ui.ARSmokingWindow() #main_ui.MainWindow()

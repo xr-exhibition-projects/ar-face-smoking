@@ -43,10 +43,38 @@ def ensure_pyinstaller_available(executable: str) -> None:
 
 
 def clean_directories(root: Path) -> None:
-    for dirname in ("build", "dist"):
-        path = root / dirname
-        if path.exists():
-            shutil.rmtree(path)
+    # Очищаем build полностью
+    build_path = root / "build"
+    if build_path.exists():
+        shutil.rmtree(build_path)
+    
+    # Очищаем dist, но сохраняем model_assets в VisoMasterAR если он есть
+    dist_path = root / "dist"
+    if dist_path.exists():
+        visomaster_ar_path = dist_path / "VisoMasterAR"
+        if visomaster_ar_path.exists():
+            # Сохраняем model_assets если он существует
+            model_assets_backup = None
+            model_assets_path = visomaster_ar_path / "model_assets"
+            if model_assets_path.exists():
+                # Создаем временную копию
+                backup_path = root / ".model_assets_backup"
+                if backup_path.exists():
+                    shutil.rmtree(backup_path)
+                shutil.copytree(model_assets_path, backup_path)
+                model_assets_backup = backup_path
+            
+            # Удаляем VisoMasterAR
+            shutil.rmtree(visomaster_ar_path)
+            
+            # Восстанавливаем model_assets если был
+            if model_assets_backup is not None:
+                visomaster_ar_path.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(model_assets_backup, model_assets_path)
+                shutil.rmtree(model_assets_backup)
+        else:
+            # Если нет VisoMasterAR, удаляем весь dist
+            shutil.rmtree(dist_path)
 
 
 def build(pyinstaller_exe: str, spec_path: Path) -> None:
@@ -57,6 +85,28 @@ def build(pyinstaller_exe: str, spec_path: Path) -> None:
         str(spec_path),
     ]
     subprocess.check_call(cmd)
+
+
+def copy_tensorrt_dlls(dist_dir: Path, project_root: Path) -> None:
+    """Копирует DLL файлы TensorRT из dependencies в корень сборки (рядом с exe)."""
+    dependencies_dir = project_root / "dependencies"
+    tensorrt_dlls = [
+        'nvinfer_10.dll',
+        'nvinfer_builder_resource_10.dll',
+        'nvinfer_plugin_10.dll',
+        'nvonnxparser_10.dll',
+    ]
+    
+    copied = []
+    for dll_name in tensorrt_dlls:
+        src = dependencies_dir / dll_name
+        if src.exists():
+            dst = dist_dir / dll_name
+            shutil.copy2(src, dst)
+            copied.append(dll_name)
+    
+    if copied:
+        print(f"Copied TensorRT DLLs to dist root: {', '.join(copied)}")
 
 
 def main() -> None:
@@ -82,6 +132,10 @@ def main() -> None:
         else:
             dist_name = "VisoMaster"
         dist_dir = project_root / "dist" / dist_name
+    
+    # Копируем DLL TensorRT в корень сборки (рядом с exe)
+    copy_tensorrt_dlls(dist_dir, project_root)
+    
     print(f"\nBuild finished. Distributable folder: {dist_dir}")
 
 

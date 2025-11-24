@@ -1,4 +1,13 @@
-models_dir = './model_assets'
+# Определяем путь к model_assets
+# Используем переменную окружения, если она установлена (для frozen приложений)
+# Иначе используем относительный путь
+import os
+models_dir = os.environ.get('VISOMASTER_MODELS_DIR', './model_assets')
+# Нормализуем путь (убираем лишние слеши)
+if os.path.isabs(models_dir):
+    models_dir = os.path.normpath(models_dir)
+else:
+    models_dir = os.path.normpath(models_dir)
 assets_repo = "https://github.com/visomaster/visomaster-assets/releases/download"
 
 try:
