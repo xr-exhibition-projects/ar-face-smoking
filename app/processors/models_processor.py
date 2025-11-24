@@ -255,11 +255,15 @@ class ModelsProcessor(QtCore.QObject):
 
     def get_gpu_memory(self):
         command = "nvidia-smi --query-gpu=memory.total --format=csv"
-        memory_total_info = sp.check_output(command.split()).decode('ascii').split('\n')[:-1][1:]
+        # На Windows скрываем всплывающие консольные окна при вызове nvidia-smi
+        creationflags = getattr(sp, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        kwargs = {"creationflags": creationflags} if creationflags else {}
+
+        memory_total_info = sp.check_output(command.split(), **kwargs).decode('ascii').split('\n')[:-1][1:]
         memory_total = [int(x.split()[0]) for i, x in enumerate(memory_total_info)]
 
         command = "nvidia-smi --query-gpu=memory.free --format=csv"
-        memory_free_info = sp.check_output(command.split()).decode('ascii').split('\n')[:-1][1:]
+        memory_free_info = sp.check_output(command.split(), **kwargs).decode('ascii').split('\n')[:-1][1:]
         memory_free = [int(x.split()[0]) for i, x in enumerate(memory_free_info)]
 
         memory_used = memory_total[0] - memory_free[0]
