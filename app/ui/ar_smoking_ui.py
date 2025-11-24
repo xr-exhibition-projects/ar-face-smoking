@@ -338,6 +338,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.mediaToggleButton = QtWidgets.QPushButton(self)
         self.mediaToggleButton.setCheckable(True)
         self.mediaToggleButton.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        # Скрываем кнопку переключения камера/видео
+        self.mediaToggleButton.hide()
         self.mediaToggleButton.setStyleSheet(
             """
             QPushButton {
@@ -358,6 +360,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             """
         )
         self.mediaToggleButton.toggled.connect(self._on_media_toggle)
+        # Кнопка всегда скрыта
         self.mediaToggleButton.hide()
         self._update_media_toggle_button()
 
@@ -401,21 +404,15 @@ class ARSmokingWindow(main_ui.MainWindow):
             }
         }
         
-        # Пытаемся найти конфиг в корне проекта
-        project_root = Path(__file__).resolve().parents[2]
-        config_path = project_root / ANIMATION_CONFIG_PATH
-        
-        # Если не найден, пробуем через _resource_path (если доступен)
-        if not config_path.exists():
-            try:
-                # Пробуем использовать метод _resource_path, если он доступен
-                if hasattr(self, '_resource_path'):
-                    config_path = Path(self._resource_path(ANIMATION_CONFIG_PATH))
-                elif hasattr(super(), '_resource_path'):
-                    config_path = Path(super()._resource_path(ANIMATION_CONFIG_PATH))
-            except Exception:
-                # Если _resource_path недоступен, используем корень проекта
-                pass
+        # Для frozen приложений ищем рядом с exe, иначе в корне проекта
+        if getattr(sys, "frozen", False):
+            # Для frozen приложения ищем рядом с exe
+            base_path = Path(sys.executable).parent
+            config_path = base_path / ANIMATION_CONFIG_PATH
+        else:
+            # Для обычного запуска используем корень проекта
+            project_root = Path(__file__).resolve().parents[2]
+            config_path = project_root / ANIMATION_CONFIG_PATH
         
         if not config_path.exists():
             # Создаём файл с дефолтными значениями
@@ -457,12 +454,26 @@ class ARSmokingWindow(main_ui.MainWindow):
     #  Initialization helpers
     # ------------------------------------------------------------------ #
     def _resolve_default_images_dir(self) -> Optional[str]:
-        project_root = Path(__file__).resolve().parents[2]
-        # Path works with forward slashes on all platforms
-        images_dir = project_root / ASSETS_IMAGES_DIR
-        if images_dir.is_dir():
-            return str(images_dir)
-        return None
+        """Определяет путь к папке с изображениями для подмены лица."""
+        # Для frozen приложений ищем в нескольких местах
+        if getattr(sys, "frozen", False):
+            base_path = Path(sys.executable).parent
+            # Пробуем рядом с exe
+            images_dir = base_path / ASSETS_IMAGES_DIR
+            if images_dir.is_dir():
+                return str(images_dir)
+            # Пробуем в _internal
+            images_dir = base_path / "_internal" / ASSETS_IMAGES_DIR
+            if images_dir.is_dir():
+                return str(images_dir)
+            return None
+        else:
+            # Для обычного запуска используем корень проекта
+            project_root = Path(__file__).resolve().parents[2]
+            images_dir = project_root / ASSETS_IMAGES_DIR
+            if images_dir.is_dir():
+                return str(images_dir)
+            return None
 
     def _request_webcam_listing(self) -> None:
         QtCore.QTimer.singleShot(150, lambda: self._ensure_webcam_entry())
@@ -1476,9 +1487,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.welcomeOverlay.hide()
         self.buttonUport.show()
         self.configButton.show()
-        if self.mediaToggleButton:
-            self.mediaToggleButton.show()
-            self._update_media_toggle_button()
+        # Кнопка переключения камера/видео скрыта
+        # if self.mediaToggleButton:
+        #     self.mediaToggleButton.show()
+        #     self._update_media_toggle_button()
         self._position_config_button()
         QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
         QtCore.QTimer.singleShot(0, self._ensure_playing)
