@@ -652,7 +652,14 @@ class FrameWorker(threading.Thread):
 
         zombie_texture = parameters.get("TextureStrengthSlider", 0)
         zombie_color = parameters.get("ColorStrengthSlider", 0)
-        if zombie_texture > 0 or zombie_color > 0:
+        overlay_color_factor = overlay_texture_factor = 1.0
+        if hasattr(self.main_window, "get_zombie_overlay_factors"):
+            overlay_color_factor, overlay_texture_factor = self.main_window.get_zombie_overlay_factors()
+
+        zombie_color_strength = (zombie_color / 100.0) * overlay_color_factor
+        zombie_texture_strength = (zombie_texture / 100.0) * overlay_texture_factor
+
+        if zombie_texture_strength > 0 or zombie_color_strength > 0:
             ref_data = self.models_processor.get_reference_image()
             if ref_data is not None:
                 try:
@@ -663,13 +670,13 @@ class FrameWorker(threading.Thread):
                     aligned = texture_transfer.align_reference_to_target(
                         ref_img, ref_kps, target_size=target_size
                     )
-                    if zombie_color > 0:
+                    if zombie_color_strength > 0:
                         texture_canvas = texture_transfer.transfer_color_reinhard(
-                            aligned, texture_canvas, strength=zombie_color / 100.0
+                            aligned, texture_canvas, strength=zombie_color_strength
                         )
-                    if zombie_texture > 0:
+                    if zombie_texture_strength > 0:
                         texture_canvas = texture_transfer.transfer_texture_highpass(
-                            aligned, texture_canvas, strength=zombie_texture / 100.0
+                            aligned, texture_canvas, strength=zombie_texture_strength
                         )
                     swap = texture_canvas
                 except Exception as exc:
