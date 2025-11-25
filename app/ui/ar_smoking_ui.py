@@ -116,6 +116,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._animation_config = self._load_animation_config()
         self._animation_stages = self._animation_config.get("animation_stages", {})
         self._death_delay_timer: Optional[QtCore.QTimer] = None
+        
+        # Face loading state
+        self._faces_loading_in_progress: bool = False
 
         import time
         self._startup_start_time = time.time()
@@ -586,6 +589,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         import time
         t0 = time.time()
         print(f"[Startup] _load_default_input_faces() started")
+        
+        # Защита от повторного вызова
+        if self._faces_loading_in_progress:
+            print(f"[Startup] _load_default_input_faces() skipped (already in progress)")
+            return
+        
         if self._default_images_dir:
             print(f"[Startup] Found images directory: {self._default_images_dir}")
         
@@ -599,6 +608,9 @@ class ARSmokingWindow(main_ui.MainWindow):
             print(f"[Startup] Searched path: {ASSETS_IMAGES_DIR}")
             return
 
+        # Устанавливаем флаг, чтобы предотвратить повторный вызов
+        self._faces_loading_in_progress = True
+        
         list_view_actions.clear_stop_loading_input_media(self)
         card_actions.clear_input_faces(self)
 
@@ -617,6 +629,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             partial(list_view_actions.add_media_thumbnail_to_source_faces_list, self)
         )
         self.input_faces_loader_worker.finished.connect(self._on_input_faces_finished)
+        # Сбрасываем флаг при завершении загрузки
+        self.input_faces_loader_worker.finished.connect(lambda: setattr(self, '_faces_loading_in_progress', False))
         
         t1 = time.time()
         self.input_faces_loader_worker.start()
@@ -1298,6 +1312,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.video_processor.current_frame = []
         self.video_processor.media_path = False
         self.video_processor.file_type = None
+        # Сбрасываем флаг загрузки лиц, чтобы разрешить повторную загрузку
+        self._faces_loading_in_progress = False
         QtCore.QTimer.singleShot(100, self._request_webcam_listing)
         QtCore.QTimer.singleShot(150, self._load_default_input_faces)
 
