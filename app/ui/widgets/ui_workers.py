@@ -157,7 +157,11 @@ class InputFacesLoaderWorker(qtc.QThread):
             print(f"[Startup] InputFacesLoaderWorker: loaded {loaded_count} recognition models in {time.time() - t0:.2f}s")
         if was_playing:
             self.main_window.buttonMediaPlay.click()
-        print(f"[Startup] InputFacesLoaderWorker.pre_load_detection_recognition_models() completed in {time.time() - t_start:.2f}s")
+        elapsed = time.time() - t_start
+        print(f"[Startup] InputFacesLoaderWorker.pre_load_detection_recognition_models() completed in {elapsed:.2f}s")
+        if hasattr(self.main_window, '_startup_start_time'):
+            total_elapsed = time.time() - self.main_window._startup_start_time
+            print(f"[Startup] pre_load_detection_recognition_models() total time since init: {total_elapsed:.2f}s")
 
     def run(self):
         import time

@@ -133,15 +133,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         t0 = time.time()
         self._model_warmup_worker = ui_workers.ModelWarmupWorker(self)
         self._model_warmup_worker.finished.connect(self._on_warmup_finished)
+        # Запускаем загрузку лиц только после завершения warmup, чтобы избежать дублирования загрузки моделей
+        self._model_warmup_worker.finished.connect(self._load_default_input_faces)
         print(f"[Startup] ModelWarmupWorker created in {time.time() - t0:.2f}s")
         
         t0 = time.time()
         self._model_warmup_worker.start()
         print(f"[Startup] ModelWarmupWorker.start() called in {time.time() - t0:.2f}s (worker runs in background)")
-
-        t0 = time.time()
-        self._load_default_input_faces()
-        print(f"[Startup] _load_default_input_faces() completed in {time.time() - t0:.2f}s")
+        # НЕ вызываем _load_default_input_faces() здесь - дождёмся завершения warmup
         
         t0 = time.time()
         self._request_webcam_listing()
@@ -406,6 +405,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             elapsed = time.time() - self._startup_start_time
             print(f"[Startup] ModelWarmupWorker finished in {elapsed:.2f}s (total since init)")
         self._model_warmup_worker = None
+        # _load_default_input_faces() будет вызван автоматически через сигнал finished.connect()
 
     def _load_animation_config(self) -> dict:
         """Загружает конфигурацию анимации из JSON файла."""
@@ -636,6 +636,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _on_input_faces_finished(self) -> None:
         import time
+        t0 = time.time()
         if hasattr(self, '_startup_start_time'):
             elapsed = time.time() - self._startup_start_time
             print(f"[Startup] InputFacesLoaderWorker finished in {elapsed:.2f}s (total since init)")
@@ -651,19 +652,30 @@ class ARSmokingWindow(main_ui.MainWindow):
         if not self._auto_face_selected:
             first_face = next(iter(self.input_faces.values()), None)
             if first_face:
+                t1 = time.time()
                 self._assign_input_face(first_face)
+                print(f"[Startup] _assign_input_face() completed in {time.time() - t1:.2f}s")
+        print(f"[Startup] _on_input_faces_finished() completed in {time.time() - t0:.2f}s")
 
     # ------------------------------------------------------------------ #
     #  Preparation helpers
     # ------------------------------------------------------------------ #
     def _prepare_target_faces(self, retries: int = 0) -> None:
+        import time
+        if retries == 0:
+            t_start = time.time()
+            print(f"[Startup] _prepare_target_faces() started (retry {retries})")
+        
         if not self.selected_video_button:
             if retries < 10:
                 QtCore.QTimer.singleShot(300, lambda: self._prepare_target_faces(retries + 1))
             return
 
         was_playing = self.buttonMediaPlay.isChecked()
+        t0 = time.time()
         card_actions.find_target_faces(self)
+        print(f"[Startup] find_target_faces() completed in {time.time() - t0:.2f}s")
+        
         if was_playing and not self.video_processor.processing:
             QtCore.QTimer.singleShot(0, self._ensure_playing)
 
@@ -675,6 +687,12 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._try_enable_uporotsya()
             if not self.buttonMediaPlay.isChecked():
                 self.buttonMediaPlay.setChecked(True)
+            if retries == 0:
+                elapsed = time.time() - t_start
+                print(f"[Startup] _prepare_target_faces() completed in {elapsed:.2f}s")
+                if hasattr(self, '_startup_start_time'):
+                    total_elapsed = time.time() - self._startup_start_time
+                    print(f"[Startup] Target faces prepared in {total_elapsed:.2f}s (total since init)")
         elif retries < 10:
             QtCore.QTimer.singleShot(500, lambda: self._prepare_target_faces(retries + 1))
         else:
@@ -1679,10 +1697,18 @@ class ARSmokingWindow(main_ui.MainWindow):
         return ordered or ["Default"]
 
     def _ensure_webcam_entry(self, attempt: int = 0) -> None:
+        import time
+        if attempt == 0:
+            t_start = time.time()
+            print(f"[Startup] _ensure_webcam_entry() started (attempt {attempt})")
+        
         capture = self.video_processor.media_capture
         if capture and capture.isOpened():
             if not self._auto_target_selected:
                 self._auto_target_selected = True
+                if attempt == 0 and hasattr(self, '_startup_start_time'):
+                    elapsed = time.time() - self._startup_start_time
+                    print(f"[Startup] Webcam already opened in {elapsed:.2f}s (total since init)")
                 QtCore.QTimer.singleShot(120, self._ensure_playing)
                 QtCore.QTimer.singleShot(360, self._prepare_target_faces)
                 QtCore.QTimer.singleShot(400, self._position_uporotsya_button)
@@ -1700,7 +1726,13 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         backend_name = self._webcam_backend_candidates[attempt]
         backend_flag = CAMERA_BACKENDS[backend_name]
+        t0 = time.time()
         if self._load_webcam_direct(backend_flag, backend_name):
+            elapsed = time.time() - t0
+            print(f"[Startup] _load_webcam_direct() succeeded with {backend_name} in {elapsed:.2f}s")
+            if hasattr(self, '_startup_start_time'):
+                total_elapsed = time.time() - self._startup_start_time
+                print(f"[Startup] Webcam opened in {total_elapsed:.2f}s (total since init)")
             self._auto_target_selected = True
             QtCore.QTimer.singleShot(120, self._ensure_playing)
             QtCore.QTimer.singleShot(360, self._prepare_target_faces)
@@ -1719,6 +1751,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtCore.QTimer.singleShot(0, self._ensure_playing)
 
     def _ensure_playing(self) -> None:
+        import time
+        t_start = time.time()
+        print(f"[Startup] _ensure_playing() started")
+        
         if not self.selected_video_button:
             return
 
@@ -1728,7 +1764,14 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         if not self.video_processor.processing:
             video_control_actions.set_play_button_icon_to_stop(self)
+            t0 = time.time()
             self.video_processor.process_video()
+            print(f"[Startup] video_processor.process_video() called in {time.time() - t0:.2f}s")
+            elapsed = time.time() - t_start
+            print(f"[Startup] _ensure_playing() completed in {elapsed:.2f}s")
+            if hasattr(self, '_startup_start_time'):
+                total_elapsed = time.time() - self._startup_start_time
+                print(f"[Startup] Video processing initiated in {total_elapsed:.2f}s (total since init)")
 
     def _load_webcam_direct(self, backend_flag: int, backend_name: str) -> bool:
         if self._webcam_button:
