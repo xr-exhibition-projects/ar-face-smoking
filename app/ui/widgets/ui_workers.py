@@ -125,6 +125,9 @@ class InputFacesLoaderWorker(qtc.QThread):
         self.pre_load_detection_recognition_models()
         
     def pre_load_detection_recognition_models(self):
+        import time
+        t_start = time.time()
+        print(f"[Startup] InputFacesLoaderWorker.pre_load_detection_recognition_models() started")
         control = self.main_window.control.copy()
         detect_model = detection_model_mapping[control['DetectorModelSelection']]
         landmark_detect_model = landmark_model_mapping[control['LandmarkDetectModelSelection']]
@@ -134,21 +137,40 @@ class InputFacesLoaderWorker(qtc.QThread):
             self.main_window.buttonMediaPlay.click()
         else:
             was_playing = False
+        t0 = time.time()
         if not models_processor.models[detect_model]:
             models_processor.models[detect_model] = models_processor.load_model(detect_model)
+            print(f"[Startup] InputFacesLoaderWorker: loaded {detect_model} in {time.time() - t0:.2f}s")
+        t0 = time.time()
         if not models_processor.models[landmark_detect_model] and control['LandmarkDetectToggle']:
             models_processor.models[landmark_detect_model] = models_processor.load_model(landmark_detect_model)
+            print(f"[Startup] InputFacesLoaderWorker: loaded {landmark_detect_model} in {time.time() - t0:.2f}s")
+        t0 = time.time()
+        loaded_count = 0
         for recognition_model in ['Inswapper128ArcFace', 'SimSwapArcFace', 'GhostArcFace', 'CSCSArcFace', 'CSCSIDArcFace']:
             if not models_processor.models[recognition_model]:
+                t1 = time.time()
                 models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
+                loaded_count += 1
+                print(f"[Startup] InputFacesLoaderWorker: loaded {recognition_model} in {time.time() - t1:.2f}s")
+        if loaded_count > 0:
+            print(f"[Startup] InputFacesLoaderWorker: loaded {loaded_count} recognition models in {time.time() - t0:.2f}s")
         if was_playing:
             self.main_window.buttonMediaPlay.click()
+        print(f"[Startup] InputFacesLoaderWorker.pre_load_detection_recognition_models() completed in {time.time() - t_start:.2f}s")
 
     def run(self):
+        import time
+        t_start = time.time()
+        print(f"[Startup] InputFacesLoaderWorker.run() started")
         if self.folder_name or self.files_list:
             self.main_window.placeholder_update_signal.emit(self.main_window.inputFacesList, True)
+            t0 = time.time()
             self.load_faces(self.folder_name, self.files_list)
+            print(f"[Startup] InputFacesLoaderWorker.load_faces() completed in {time.time() - t0:.2f}s")
             self.main_window.placeholder_update_signal.emit(self.main_window.inputFacesList, False)
+        elapsed = time.time() - t_start
+        print(f"[Startup] InputFacesLoaderWorker.run() completed in {elapsed:.2f}s")
 
     def load_faces(self, folder_name=False, files_list=None):
         control = self.main_window.control.copy()
@@ -224,21 +246,53 @@ class ModelWarmupWorker(qtc.QThread):
         self.main_window = main_window
 
     def run(self):
+        import time
+        t_start = time.time()
+        print(f"[Startup] ModelWarmupWorker.run() started")
         try:
             control = self.main_window.control.copy()
             models_processor = self.main_window.models_processor
 
+            t0 = time.time()
             detect_model = detection_model_mapping[control['DetectorModelSelection']]
             if not models_processor.models.get(detect_model):
                 models_processor.models[detect_model] = models_processor.load_model(detect_model)
+                print(f"[Startup] ModelWarmupWorker: loaded {detect_model} in {time.time() - t0:.2f}s")
 
+            t0 = time.time()
             landmark_model = landmark_model_mapping[control['LandmarkDetectModelSelection']]
             if control.get('LandmarkDetectToggle') and not models_processor.models.get(landmark_model):
                 models_processor.models[landmark_model] = models_processor.load_model(landmark_model)
+                print(f"[Startup] ModelWarmupWorker: loaded {landmark_model} in {time.time() - t0:.2f}s")
 
-            for recognition_model in ['Inswapper128ArcFace', 'SimSwapArcFace', 'GhostArcFace', 'CSCSArcFace', 'CSCSIDArcFace']:
+            recognition_models = []
+
+            def _collect(model_name):
+                if model_name and model_name not in recognition_models:
+                    recognition_models.append(model_name)
+
+            _collect(control.get('RecognitionModelSelection'))
+
+            swapper_model = control.get('SwapModelSelection')
+            if swapper_model:
+                try:
+                    _collect(models_processor.get_arcface_model(swapper_model))
+                    if swapper_model == 'CSCS':
+                        _collect('CSCSIDArcFace')
+                except Exception:
+                    pass
+
+            if not recognition_models:
+                recognition_models = ['Inswapper128ArcFace']
+
+            t0 = time.time()
+            for recognition_model in recognition_models:
                 if not models_processor.models.get(recognition_model):
+                    t1 = time.time()
                     models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
+                    print(f"[Startup] ModelWarmupWorker: loaded {recognition_model} in {time.time() - t1:.2f}s")
+            if recognition_models:
+                print(f"[Startup] ModelWarmupWorker: loaded {len(recognition_models)} recognition models in {time.time() - t0:.2f}s")
 
             restorer_model_map = {
                 'GFPGAN-v1.4': 'GFPGANv1.4',
@@ -261,10 +315,14 @@ class ModelWarmupWorker(qtc.QThread):
                 restorer_type = control.get('FaceRestorerType2Selection')
                 restorer_model = restorer_model_map.get(restorer_type)
                 if restorer_model and not models_processor.models.get(restorer_model):
+                    t1 = time.time()
                     models_processor.models[restorer_model] = models_processor.load_model(restorer_model)
+                    print(f"[Startup] ModelWarmupWorker: loaded {restorer_model} in {time.time() - t1:.2f}s")
         except Exception:  # pylint: disable=broad-except
             traceback.print_exc()
         finally:
+            elapsed = time.time() - t_start
+            print(f"[Startup] ModelWarmupWorker.run() completed in {elapsed:.2f}s")
             self.finished.emit()
 
 

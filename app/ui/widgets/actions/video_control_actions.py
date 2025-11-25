@@ -321,7 +321,12 @@ def play_video(main_window: 'MainWindow', checked: bool):
             print("play_video: Video already playing. Stopping the current video before starting a new one.")
             video_processor.stop_processing()
             return
-        print("play_video: Starting video processing.")
+        import time
+        t_start = time.time()
+        print(f"[Startup] play_video: Starting video processing at {time.strftime('%H:%M:%S', time.localtime(t_start))}")
+        if hasattr(main_window, '_startup_start_time'):
+            elapsed = t_start - main_window._startup_start_time
+            print(f"[Startup] Time from ARSmokingWindow.__init__ to play_video: {elapsed:.2f}s")
         set_play_button_icon_to_stop(main_window)
         video_processor.process_video()
     else:

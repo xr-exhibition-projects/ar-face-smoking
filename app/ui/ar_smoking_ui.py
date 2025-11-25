@@ -117,17 +117,40 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._animation_stages = self._animation_config.get("animation_stages", {})
         self._death_delay_timer: Optional[QtCore.QTimer] = None
 
+        import time
+        self._startup_start_time = time.time()
+        print(f"[Startup] ARSmokingWindow.__init__ started at {time.strftime('%H:%M:%S', time.localtime(self._startup_start_time))}")
+        
         self.setWindowTitle("AR Smoking UI")
+        t0 = time.time()
         self._setup_ar_smoking_ui()
+        print(f"[Startup] _setup_ar_smoking_ui completed in {time.time() - t0:.2f}s")
+        
+        t0 = time.time()
         self._connect_listeners()
+        print(f"[Startup] _connect_listeners completed in {time.time() - t0:.2f}s")
 
+        t0 = time.time()
         self._model_warmup_worker = ui_workers.ModelWarmupWorker(self)
         self._model_warmup_worker.finished.connect(self._on_warmup_finished)
+        print(f"[Startup] ModelWarmupWorker created in {time.time() - t0:.2f}s")
+        
+        t0 = time.time()
         self._model_warmup_worker.start()
+        print(f"[Startup] ModelWarmupWorker.start() called in {time.time() - t0:.2f}s (worker runs in background)")
 
+        t0 = time.time()
         self._load_default_input_faces()
+        print(f"[Startup] _load_default_input_faces() completed in {time.time() - t0:.2f}s")
+        
+        t0 = time.time()
         self._request_webcam_listing()
+        print(f"[Startup] _request_webcam_listing() completed in {time.time() - t0:.2f}s")
+        
+        t0 = time.time()
         self._show_welcome_overlay()
+        print(f"[Startup] _show_welcome_overlay() completed in {time.time() - t0:.2f}s")
+        print(f"[Startup] ARSmokingWindow.__init__ total time: {time.time() - self._startup_start_time:.2f}s")
 
     # ------------------------------------------------------------------ #
     #  MainWindow overrides
@@ -378,6 +401,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.inputFacesList.model().rowsInserted.connect(self._on_input_rows_inserted)
 
     def _on_warmup_finished(self) -> None:
+        import time
+        if hasattr(self, '_startup_start_time'):
+            elapsed = time.time() - self._startup_start_time
+            print(f"[Startup] ModelWarmupWorker finished in {elapsed:.2f}s (total since init)")
         self._model_warmup_worker = None
 
     def _load_animation_config(self) -> dict:
@@ -556,12 +583,17 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtCore.QTimer.singleShot(1200, self._fallback_to_demo_video)
 
     def _load_default_input_faces(self) -> None:
+        import time
+        t0 = time.time()
+        print(f"[Startup] _load_default_input_faces() started")
+        
         if not self._default_images_dir:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Папка с изображениями не найдена",
                 f"Не удалось найти папку `{ASSETS_IMAGES_DIR}`. Добавьте туда изображение для подмены лица.",
             )
+            print(f"[Startup] _load_default_input_faces() skipped (no images dir) in {time.time() - t0:.2f}s")
             return
 
         list_view_actions.clear_stop_loading_input_media(self)
@@ -571,15 +603,22 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.labelInputFacesPath.setText(self._default_images_dir)
         self.labelInputFacesPath.setToolTip(self._default_images_dir)
 
+        t1 = time.time()
         self.input_faces_loader_worker = ui_workers.InputFacesLoaderWorker(
             main_window=self,
             folder_name=self._default_images_dir,
         )
+        print(f"[Startup] InputFacesLoaderWorker created in {time.time() - t1:.2f}s")
+        
         self.input_faces_loader_worker.thumbnail_ready.connect(
             partial(list_view_actions.add_media_thumbnail_to_source_faces_list, self)
         )
         self.input_faces_loader_worker.finished.connect(self._on_input_faces_finished)
+        
+        t1 = time.time()
         self.input_faces_loader_worker.start()
+        print(f"[Startup] InputFacesLoaderWorker.start() called in {time.time() - t1:.2f}s (worker runs in background)")
+        print(f"[Startup] _load_default_input_faces() setup completed in {time.time() - t0:.2f}s")
 
     # ------------------------------------------------------------------ #
     #  Auto-selection callbacks
@@ -596,6 +635,11 @@ class ARSmokingWindow(main_ui.MainWindow):
                 break
 
     def _on_input_faces_finished(self) -> None:
+        import time
+        if hasattr(self, '_startup_start_time'):
+            elapsed = time.time() - self._startup_start_time
+            print(f"[Startup] InputFacesLoaderWorker finished in {elapsed:.2f}s (total since init)")
+        
         if not self.input_faces:
             QtWidgets.QMessageBox.warning(
                 self,
