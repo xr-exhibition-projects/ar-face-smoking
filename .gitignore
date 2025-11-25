@@ -44,3 +44,5 @@ installer/
 *.iss
 *.msi
 *.pkg
+
+*.dll
