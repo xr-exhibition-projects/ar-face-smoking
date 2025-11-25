@@ -664,12 +664,46 @@ class FrameWorker(threading.Thread):
             if ref_data is not None:
                 try:
                     from app.processors.utils import texture_transfer
-                    ref_img, ref_kps = ref_data
+                    # ref_data может быть tuple (tensor, kps) или просто tensor
+                    if isinstance(ref_data, tuple):
+                        ref_img = ref_data[0]
+                    else:
+                        ref_img = ref_data
+                    
+                    # Конвертируем swap в float, если он uint8
                     texture_canvas = swap.clone()
+                    if texture_canvas.dtype == torch.uint8:
+                        texture_canvas = texture_canvas.float()
+                    
                     target_size = int(texture_canvas.shape[-1])
-                    aligned = texture_transfer.align_reference_to_target(
-                        ref_img, ref_kps, target_size=target_size
+                    
+                    # Используем nose landmark из видео (kps_5[2]) для выравнивания
+                    target_nose_kps = np.array([kps_5[2]], dtype=np.float32)
+                    aligned = texture_transfer.align_reference_to_target_by_nose(
+                        ref_img, target_nose_kps, target_size=target_size
                     )
+                    
+                    # Применяем occlusion mask если включен
+                    if parameters.get("OccluderEnableToggle", False):
+                        occluder_mask = self.models_processor.apply_occlusion(original_face_256, parameters.get("OccluderSizeSlider", 0))
+                        # Масштабируем маску до target_size
+                        from torchvision.transforms import v2
+                        t_mask = v2.Resize((target_size, target_size), interpolation=v2.InterpolationMode.BILINEAR, antialias=False)
+                        occluder_mask = t_mask(occluder_mask)
+                        # Применяем blur если нужно
+                        blur_amount = parameters.get('OccluderXSegBlurSlider', 0)
+                        if blur_amount > 0:
+                            from torchvision.transforms.functional import gaussian_blur
+                            kernel_size = blur_amount * 2 + 1
+                            sigma = (blur_amount + 1) * 0.2
+                            occluder_mask = gaussian_blur(occluder_mask, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
+                        # Применяем маску к выровненному изображению
+                        aligned = aligned * occluder_mask
+                    
+                    # Конвертируем aligned в float, если нужно
+                    if aligned.dtype == torch.uint8:
+                        aligned = aligned.float()
+                    
                     if zombie_color_strength > 0:
                         texture_canvas = texture_transfer.transfer_color_reinhard(
                             aligned, texture_canvas, strength=zombie_color_strength
@@ -678,6 +712,13 @@ class FrameWorker(threading.Thread):
                         texture_canvas = texture_transfer.transfer_texture_highpass(
                             aligned, texture_canvas, strength=zombie_texture_strength
                         )
+                    
+                    # Конвертируем обратно в исходный тип swap
+                    if swap.dtype == torch.uint8:
+                        texture_canvas = torch.clamp(texture_canvas, 0, 255).byte()
+                    else:
+                        texture_canvas = torch.clamp(texture_canvas, 0, 255)
+                    
                     swap = texture_canvas
                 except Exception as exc:
                     print(f"Zombie texture transfer failed: {exc}")

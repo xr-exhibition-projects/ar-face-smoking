@@ -713,12 +713,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                     print(f"[Startup] Target faces prepared in {total_elapsed:.2f}s (total since init)")
         elif retries < 10:
             QtCore.QTimer.singleShot(500, lambda: self._prepare_target_faces(retries + 1))
-        else:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Лицо не найдено",
-                "Не удалось обнаружить лицо в видеопотоке. Попробуйте осветить сцену и перезапустить UI.",
-            )
+        # Убрали показ ошибки здесь - ошибка показывается только при нажатии на кнопку "УПОРОТЬСЯ"
 
     def _assign_input_face(self, button) -> None:
         if self._auto_face_selected:

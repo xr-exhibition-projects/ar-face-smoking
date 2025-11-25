@@ -51,6 +51,58 @@ def warp_triangle(img, src_tri, dst_tri, size):
     return dst_cropped, mask, r2
 
 
+def align_reference_to_target_by_nose(ref_img: torch.Tensor, target_nose_kps: np.ndarray, target_size: int = 128) -> torch.Tensor:
+    """
+    Aligns the reference image by anchoring its center to the target nose position.
+    No face detection required on reference image.
+    
+    Args:
+        ref_img: Reference image tensor (C, H, W) in [0, 255]
+        target_nose_kps: Nose landmark from target face (shape: (1, 2))
+        target_size: Target size for output
+    """
+    # Конвертируем в numpy для обработки
+    if ref_img.dtype == torch.uint8:
+        img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy().astype(np.float32)
+    else:
+        img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy()
+        if img_np.max() > 1.0:
+            img_np = np.clip(img_np, 0, 255)
+        else:
+            img_np = img_np * 255.0
+    
+    ref_h, ref_w = img_np.shape[:2]
+    target_nose_x, target_nose_y = target_nose_kps[0]
+    
+    # Вычисляем масштаб для вписывания reference image в target_size
+    scale_factor = min(target_size / ref_w, target_size / ref_h)
+    
+    # Вычисляем смещение для центрирования на nose
+    scaled_ref_w = ref_w * scale_factor
+    scaled_ref_h = ref_h * scale_factor
+    tx = target_nose_x - scaled_ref_w / 2
+    ty = target_nose_y - scaled_ref_h / 2
+    
+    # Создаём матрицу аффинного преобразования
+    M = np.array([
+        [scale_factor, 0, tx],
+        [0, scale_factor, ty]
+    ], dtype=np.float32)
+    
+    # Применяем преобразование
+    warped_img_np = cv2.warpAffine(
+        img_np.astype(np.uint8) if img_np.dtype != np.uint8 else img_np,
+        M,
+        (target_size, target_size),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT_101
+    )
+    
+    # Конвертируем обратно в tensor
+    warped_tensor = torch.from_numpy(warped_img_np).permute(2, 0, 1).float().to(ref_img.device)
+    return warped_tensor
+
+
 def align_reference_to_target(ref_img: torch.Tensor, ref_kps: np.ndarray, target_size: int = 128) -> torch.Tensor:
     """Align reference image to standard arcface template of given size."""
     dst_kps = faceutil.get_arcface_template(image_size=target_size, mode='arcface128')
@@ -130,8 +182,15 @@ def transfer_color_reinhard(source: torch.Tensor, target: torch.Tensor, strength
     base_strength = min(strength, 1.0)
     overdrive = max(strength - 1.0, 0.0)
 
-    src = source / 255.0
-    tgt = target / 255.0
+    # Конвертируем в float для вычислений
+    src = source.float() if source.dtype != torch.float32 else source
+    tgt = target.float() if target.dtype != torch.float32 else target
+    
+    # Нормализуем в [0, 1]
+    if src.max() > 1.0:
+        src = src / 255.0
+    if tgt.max() > 1.0:
+        tgt = tgt / 255.0
 
     src_lab = faceutil.rgb_to_lab(src, normalize=False)
     tgt_lab = faceutil.rgb_to_lab(tgt, normalize=False)
@@ -144,13 +203,16 @@ def transfer_color_reinhard(source: torch.Tensor, target: torch.Tensor, strength
     tgt_lab_new = (tgt_lab - tgt_mean) / (tgt_std + 1e-6) * src_std + src_mean
     matched = faceutil.lab_to_rgb(tgt_lab_new, normalize=False) * 255.0
 
-    blended = torch.lerp(target, matched, base_strength)
+    # Убеждаемся, что оба аргумента в float для torch.lerp
+    target_float = target.float() if target.dtype != torch.float32 else target
+    blended = torch.lerp(target_float, matched, base_strength)
 
     if overdrive > 0:
         kernel = int(7 + overdrive * 8)
         kernel += 1 - kernel % 2  # ensure odd
         sigma = max(1.5, kernel / 4.0)
-        low_freq = F.gaussian_blur(source, kernel_size=[kernel, kernel], sigma=[sigma, sigma])
+        src_float = src * 255.0  # Конвертируем обратно для blur
+        low_freq = F.gaussian_blur(src_float, kernel_size=[kernel, kernel], sigma=[sigma, sigma])
         blended = torch.lerp(blended, low_freq, min(overdrive, 1.0))
 
     return torch.clamp(blended, 0, 255)
@@ -161,13 +223,16 @@ def transfer_texture_highpass(source: torch.Tensor, target: torch.Tensor, streng
     if strength <= 0:
         return target
 
-    src = source
-    if src.shape[1:] != target.shape[1:]:
-        src = F.resize(src, target.shape[-2:])
+    # Конвертируем в float для вычислений
+    src = source.float() if source.dtype != torch.float32 else source
+    tgt = target.float() if target.dtype != torch.float32 else target
+    
+    if src.shape[1:] != tgt.shape[1:]:
+        src = F.resize(src, tgt.shape[-2:])
 
     kernel = blur_radius * 2 + 1
     src_blur = F.gaussian_blur(src, kernel_size=[kernel, kernel], sigma=[blur_radius, blur_radius])
     high_pass = src - src_blur
-    result = target + high_pass * strength
+    result = tgt + high_pass * strength
     return torch.clamp(result, 0, 255)
 
