@@ -586,6 +586,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         import time
         t0 = time.time()
         print(f"[Startup] _load_default_input_faces() started")
+        if self._default_images_dir:
+            print(f"[Startup] Found images directory: {self._default_images_dir}")
         
         if not self._default_images_dir:
             QtWidgets.QMessageBox.warning(
@@ -594,6 +596,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                 f"Не удалось найти папку `{ASSETS_IMAGES_DIR}`. Добавьте туда изображение для подмены лица.",
             )
             print(f"[Startup] _load_default_input_faces() skipped (no images dir) in {time.time() - t0:.2f}s")
+            print(f"[Startup] Searched path: {ASSETS_IMAGES_DIR}")
             return
 
         list_view_actions.clear_stop_loading_input_media(self)
@@ -642,10 +645,11 @@ class ARSmokingWindow(main_ui.MainWindow):
             print(f"[Startup] InputFacesLoaderWorker finished in {elapsed:.2f}s (total since init)")
         
         if not self.input_faces:
+            images_path = self._default_images_dir or ASSETS_IMAGES_DIR
             QtWidgets.QMessageBox.warning(
                 self,
                 "Нет исходных лиц",
-                f"В папке `{ASSETS_IMAGES_DIR}` не найдено ни одного лица. Добавьте изображение и перезапустите UI.",
+                f"В папке `{images_path}` не найдено ни одного лица. Добавьте изображение и перезапустите UI.",
             )
             return
 
