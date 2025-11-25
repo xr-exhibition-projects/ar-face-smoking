@@ -122,7 +122,7 @@ class InputFacesLoaderWorker(qtc.QThread):
         self.face_ids = face_ids or []
         self._running = True  # Flag to control the running state
         self.was_playing = True
-        self.pre_load_detection_recognition_models()
+        # НЕ вызываем pre_load_detection_recognition_models() здесь - вызовем в run() после запуска потока
         
     def pre_load_detection_recognition_models(self):
         import time
@@ -138,17 +138,21 @@ class InputFacesLoaderWorker(qtc.QThread):
         else:
             was_playing = False
         t0 = time.time()
-        if not models_processor.models[detect_model]:
+        if detect_model not in models_processor.models or models_processor.models[detect_model] is None:
             models_processor.models[detect_model] = models_processor.load_model(detect_model)
             print(f"[Startup] InputFacesLoaderWorker: loaded {detect_model} in {time.time() - t0:.2f}s")
+        else:
+            print(f"[Startup] InputFacesLoaderWorker: {detect_model} already loaded")
         t0 = time.time()
-        if not models_processor.models[landmark_detect_model] and control['LandmarkDetectToggle']:
+        if (landmark_detect_model not in models_processor.models or models_processor.models[landmark_detect_model] is None) and control['LandmarkDetectToggle']:
             models_processor.models[landmark_detect_model] = models_processor.load_model(landmark_detect_model)
             print(f"[Startup] InputFacesLoaderWorker: loaded {landmark_detect_model} in {time.time() - t0:.2f}s")
+        elif control['LandmarkDetectToggle']:
+            print(f"[Startup] InputFacesLoaderWorker: {landmark_detect_model} already loaded")
         t0 = time.time()
         loaded_count = 0
         for recognition_model in ['Inswapper128ArcFace', 'SimSwapArcFace', 'GhostArcFace', 'CSCSArcFace', 'CSCSIDArcFace']:
-            if not models_processor.models[recognition_model]:
+            if recognition_model not in models_processor.models or models_processor.models[recognition_model] is None:
                 t1 = time.time()
                 models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
                 loaded_count += 1
@@ -167,6 +171,9 @@ class InputFacesLoaderWorker(qtc.QThread):
         import time
         t_start = time.time()
         print(f"[Startup] InputFacesLoaderWorker.run() started")
+        # Загружаем модели детекции и распознавания перед использованием
+        # Это гарантирует, что модели загружены в фоновом потоке после завершения ModelWarmupWorker
+        self.pre_load_detection_recognition_models()
         if self.folder_name or self.files_list:
             self.main_window.placeholder_update_signal.emit(self.main_window.inputFacesList, True)
             t0 = time.time()
@@ -182,6 +189,17 @@ class InputFacesLoaderWorker(qtc.QThread):
         print(f"[Startup] InputFacesLoaderWorker.load_faces() started")
         
         control = self.main_window.control.copy()
+        models_processor = self.main_window.models_processor
+        
+        # Проверяем, что модель детекции загружена
+        detect_model = detection_model_mapping[control['DetectorModelSelection']]
+        if detect_model not in models_processor.models or models_processor.models[detect_model] is None:
+            print(f"[Startup] ERROR: Detection model {detect_model} is not loaded! Loading now...")
+            models_processor.models[detect_model] = models_processor.load_model(detect_model)
+            print(f"[Startup] Detection model {detect_model} loaded successfully")
+        else:
+            print(f"[Startup] Detection model {detect_model} is ready")
+        
         files_list = files_list or []
         image_files = []
         if folder_name:
