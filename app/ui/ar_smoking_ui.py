@@ -1782,15 +1782,18 @@ class ARSmokingWindow(main_ui.MainWindow):
         t_start = time.time()
         print(f"[Startup] _load_webcam_direct() started with backend: {backend_name}")
         
+        t0 = time.time()
         if self._webcam_button:
             self._webcam_button.deleteLater()
             self._webcam_button = None
+        print(f"[Startup] Previous webcam button cleanup in {time.time() - t0:.2f}s")
 
         media_id = str(uuid.uuid4())
         webcam_index: int | str = 0
         
         # Определяем webcam_index для OBS Virtual Camera (если нужно)
         # VideoCapture будет создан в load_media(), чтобы избежать двойного создания
+        t0 = time.time()
         if backend_name == "OBS Virtual Camera":
             # Проверяем доступность OBS камеры, но не создаём VideoCapture здесь
             obs_device_names = ["video=OBS Virtual Camera", "video=OBS Virtual Camera (1)", "video=OBS Virtual Camera (2)"]
@@ -1804,6 +1807,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                     temp_capture.release()
                     break
                 temp_capture.release()
+        print(f"[Startup] OBS camera check in {time.time() - t0:.2f}s")
 
         t0 = time.time()
         self._webcam_button = widget_components.TargetMediaCardButton(
@@ -1817,19 +1821,25 @@ class ARSmokingWindow(main_ui.MainWindow):
         )
         print(f"[Startup] TargetMediaCardButton created in {time.time() - t0:.2f}s")
         
+        t0 = time.time()
         self._webcam_button.hide()
+        print(f"[Startup] Button hide() in {time.time() - t0:.2f}s")
         
         t0 = time.time()
         self._webcam_button.load_media()
         load_media_time = time.time() - t0
         print(f"[Startup] load_media() completed in {load_media_time:.2f}s")
 
+        t0 = time.time()
         capture = self.video_processor.media_capture
         if capture and capture.isOpened():
             self.target_videos = {media_id: self._webcam_button}
             self._media_mode = "webcam"
+            t1 = time.time()
             self._update_media_toggle_button()
+            print(f"[Startup] _update_media_toggle_button() in {time.time() - t1:.2f}s")
             elapsed = time.time() - t_start
+            print(f"[Startup] Post-load_media operations in {time.time() - t0:.2f}s")
             print(f"[Startup] _load_webcam_direct() succeeded in {elapsed:.2f}s")
             return True
 
