@@ -1788,35 +1788,22 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         media_id = str(uuid.uuid4())
         webcam_index: int | str = 0
-        capture = None
         
-        t0 = time.time()
+        # Определяем webcam_index для OBS Virtual Camera (если нужно)
+        # VideoCapture будет создан в load_media(), чтобы избежать двойного создания
         if backend_name == "OBS Virtual Camera":
+            # Проверяем доступность OBS камеры, но не создаём VideoCapture здесь
             obs_device_names = ["video=OBS Virtual Camera", "video=OBS Virtual Camera (1)", "video=OBS Virtual Camera (2)"]
+            webcam_index = 0  # По умолчанию
+            backend_flag = cv2.CAP_DSHOW
+            # Попробуем найти доступную OBS камеру (быстрая проверка без создания capture)
             for device_name in obs_device_names:
                 temp_capture = cv2.VideoCapture(device_name, cv2.CAP_DSHOW)
                 if temp_capture.isOpened():
-                    capture = temp_capture
                     webcam_index = device_name
+                    temp_capture.release()
                     break
                 temp_capture.release()
-            if capture is None:
-                capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-                if capture.isOpened():
-                    webcam_index = 0
-                else:
-                    capture.release()
-                    print(f"[Startup] Failed to open OBS Virtual Camera in {time.time() - t0:.2f}s")
-                    return False
-            backend_flag = cv2.CAP_DSHOW
-        else:
-            # Для обычных камер создаём VideoCapture
-            capture = cv2.VideoCapture(webcam_index, backend_flag)
-            if not capture.isOpened():
-                print(f"[Startup] Failed to open webcam with {backend_name} in {time.time() - t0:.2f}s")
-                return False
-        
-        print(f"[Startup] VideoCapture opened in {time.time() - t0:.2f}s")
 
         t0 = time.time()
         self._webcam_button = widget_components.TargetMediaCardButton(
