@@ -204,8 +204,6 @@ class TargetMediaCardButton(CardButton):
             import time
             t_webcam_start = time.time()
             print(f"[Startup] load_media() for webcam started")
-            
-            res_width, res_height = self.main_window.control['WebcamMaxResSelection'].split('x')
 
             t0 = time.time()
             if isinstance(self.webcam_index, str):
@@ -218,9 +216,10 @@ class TargetMediaCardButton(CardButton):
 
             t0 = time.time()
             if media_capture.isOpened():
+                # Установка BUFFERSIZE обычно быстрая
                 media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(res_width))
-                media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(res_height))
+                # Разрешение не устанавливаем - используем нативное разрешение камеры для ускорения инициализации
+                print(f"[Startup] Using camera's native resolution (not setting custom resolution)")
             print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999
