@@ -177,63 +177,107 @@ class InputFacesLoaderWorker(qtc.QThread):
         print(f"[Startup] InputFacesLoaderWorker.run() completed in {elapsed:.2f}s")
 
     def load_faces(self, folder_name=False, files_list=None):
+        import time
+        t_start = time.time()
+        print(f"[Startup] InputFacesLoaderWorker.load_faces() started")
+        
         control = self.main_window.control.copy()
         files_list = files_list or []
         image_files = []
         if folder_name:
             image_files = misc_helpers.get_image_files(self.folder_name, self.main_window.control['InputFacesFolderRecursiveToggle'])
+            print(f"[Startup] Found {len(image_files)} image files in {folder_name}")
         elif files_list:
             image_files = files_list
+            print(f"[Startup] Processing {len(image_files)} image files from list")
 
         i=0
+        faces_found = 0
+        faces_processed = 0
         image_files.sort()
         for image_file_path in image_files:
             if not self._running:  # Check if the thread is still running
                 break
             if not misc_helpers.is_image_file(image_file_path):
-                return
+                print(f"[Startup] Skipping non-image file: {image_file_path}")
+                continue
             if folder_name:
                 image_file_path = os.path.join(folder_name, image_file_path)
+            
+            t_file = time.time()
             frame = misc_helpers.read_image_file(image_file_path)
             if frame is None:
+                print(f"[Startup] Failed to read image: {image_file_path}")
                 continue
+            print(f"[Startup] Loaded image {i+1}/{len(image_files)}: {os.path.basename(image_file_path)} in {time.time() - t_file:.2f}s")
             # Frame must be in RGB format
             frame = frame[..., ::-1]  # Swap the channels from BGR to RGB
 
             img = torch.from_numpy(frame.astype('uint8')).to(self.main_window.models_processor.device)
             img = img.permute(2,0,1)
+            
+            t_detect = time.time()
             _, kpss_5, _ = self.main_window.models_processor.run_detect(img, control['DetectorModelSelection'], max_num=1, score=control['DetectorScoreSlider']/100.0, input_size=(512, 512), use_landmark_detection=control['LandmarkDetectToggle'], landmark_detect_mode=control['LandmarkDetectModelSelection'], landmark_score=control["LandmarkDetectScoreSlider"]/100.0, from_points=control["DetectFromPointsToggle"], rotation_angles=[0] if not control["AutoRotationToggle"] else [0, 90, 180, 270])
-
+            detect_time = time.time() - t_detect
+            faces_found += 1
+            
             # If atleast one face is found
             # found_face = []
             face_kps = False
             try:
                 face_kps = kpss_5[0]
+                print(f"[Startup] Face detected in {os.path.basename(image_file_path)} (detection took {detect_time:.2f}s)")
             except IndexError:
+                print(f"[Startup] No face detected in {os.path.basename(image_file_path)} (detection took {detect_time:.2f}s)")
                 continue
             if face_kps.any():
-                face_emb, cropped_img = self.main_window.models_processor.run_recognize_direct(img, face_kps, control['SimilarityTypeSelection'], control['RecognitionModelSelection'])
-                cropped_img = cropped_img.cpu().numpy()
-                cropped_img = cropped_img[..., ::-1]  # Swap the channels from RGB to BGR
-                face_img = numpy.ascontiguousarray(cropped_img)
-                # crop = cv2.resize(face[2].cpu().numpy(), (82, 82))
-                pixmap = common_widget_actions.get_pixmap_from_frame(self.main_window, face_img)
+                print(f"[Startup] Face keypoints are valid, processing recognition for {os.path.basename(image_file_path)}")
+                try:
+                    t_rec = time.time()
+                    face_emb, cropped_img = self.main_window.models_processor.run_recognize_direct(img, face_kps, control['SimilarityTypeSelection'], control['RecognitionModelSelection'])
+                    print(f"[Startup] Main recognition completed in {time.time() - t_rec:.2f}s")
+                    
+                    cropped_img = cropped_img.cpu().numpy()
+                    cropped_img = cropped_img[..., ::-1]  # Swap the channels from RGB to BGR
+                    face_img = numpy.ascontiguousarray(cropped_img)
+                    # crop = cv2.resize(face[2].cpu().numpy(), (82, 82))
+                    pixmap = common_widget_actions.get_pixmap_from_frame(self.main_window, face_img)
 
-                embedding_store: Dict[str, numpy.ndarray] = {}
-                # Ottenere i valori di 'options'
-                options = SETTINGS_LAYOUT_DATA['Face Recognition']['RecognitionModelSelection']['options']
-                for option in options:
-                    if option != control['RecognitionModelSelection']:
-                        target_emb, _ = self.main_window.models_processor.run_recognize_direct(img, face_kps, control['SimilarityTypeSelection'], option)
-                        embedding_store[option] = target_emb
+                    embedding_store: Dict[str, numpy.ndarray] = {}
+                    # Ottenere i valori di 'options'
+                    options = SETTINGS_LAYOUT_DATA['Face Recognition']['RecognitionModelSelection']['options']
+                    t_emb = time.time()
+                    for option in options:
+                        if option != control['RecognitionModelSelection']:
+                            target_emb, _ = self.main_window.models_processor.run_recognize_direct(img, face_kps, control['SimilarityTypeSelection'], option)
+                            embedding_store[option] = target_emb
+                        else:
+                            embedding_store[control['RecognitionModelSelection']] = face_emb
+                    print(f"[Startup] All embeddings extracted in {time.time() - t_emb:.2f}s")
+                    
+                    if not self.face_ids:
+                        face_id = str(uuid.uuid1().int)
                     else:
-                        embedding_store[control['RecognitionModelSelection']] = face_emb
-                if not self.face_ids:
-                    face_id = str(uuid.uuid1().int)
-                else:
-                    face_id = self.face_ids[i]
-                self.thumbnail_ready.emit(image_file_path, face_img, embedding_store, pixmap, face_id)
-                i+=1
+                        face_id = self.face_ids[i]
+                    
+                    self.thumbnail_ready.emit(image_file_path, face_img, embedding_store, pixmap, face_id)
+                    faces_processed += 1
+                    print(f"[Startup] Successfully processed face {faces_processed} from {os.path.basename(image_file_path)}")
+                    i+=1
+                except Exception as e:
+                    print(f"[Startup] Error processing face from {os.path.basename(image_file_path)}: {e}")
+                    traceback.print_exc()
+                    continue
+            else:
+                print(f"[Startup] Face keypoints are empty/invalid for {os.path.basename(image_file_path)}")
+        
+        elapsed = time.time() - t_start
+        print(f"[Startup] InputFacesLoaderWorker.load_faces() completed:")
+        print(f"[Startup]   - Total images processed: {i}/{len(image_files)}")
+        print(f"[Startup]   - Faces detected: {faces_found}")
+        print(f"[Startup]   - Faces successfully processed: {faces_processed}")
+        print(f"[Startup]   - Total time: {elapsed:.2f}s")
+        
         torch.cuda.empty_cache()
         self.finished.emit()
 

@@ -1778,6 +1778,10 @@ class ARSmokingWindow(main_ui.MainWindow):
                 print(f"[Startup] Video processing initiated in {total_elapsed:.2f}s (total since init)")
 
     def _load_webcam_direct(self, backend_flag: int, backend_name: str) -> bool:
+        import time
+        t_start = time.time()
+        print(f"[Startup] _load_webcam_direct() started with backend: {backend_name}")
+        
         if self._webcam_button:
             self._webcam_button.deleteLater()
             self._webcam_button = None
@@ -1785,6 +1789,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         media_id = str(uuid.uuid4())
         webcam_index: int | str = 0
         capture = None
+        
+        t0 = time.time()
         if backend_name == "OBS Virtual Camera":
             obs_device_names = ["video=OBS Virtual Camera", "video=OBS Virtual Camera (1)", "video=OBS Virtual Camera (2)"]
             for device_name in obs_device_names:
@@ -1800,9 +1806,19 @@ class ARSmokingWindow(main_ui.MainWindow):
                     webcam_index = 0
                 else:
                     capture.release()
+                    print(f"[Startup] Failed to open OBS Virtual Camera in {time.time() - t0:.2f}s")
                     return False
             backend_flag = cv2.CAP_DSHOW
+        else:
+            # Для обычных камер создаём VideoCapture
+            capture = cv2.VideoCapture(webcam_index, backend_flag)
+            if not capture.isOpened():
+                print(f"[Startup] Failed to open webcam with {backend_name} in {time.time() - t0:.2f}s")
+                return False
+        
+        print(f"[Startup] VideoCapture opened in {time.time() - t0:.2f}s")
 
+        t0 = time.time()
         self._webcam_button = widget_components.TargetMediaCardButton(
             media_path=f"Webcam ({backend_name})",
             file_type="webcam",
@@ -1812,18 +1828,28 @@ class ARSmokingWindow(main_ui.MainWindow):
             webcam_backend=backend_flag,
             main_window=self,
         )
+        print(f"[Startup] TargetMediaCardButton created in {time.time() - t0:.2f}s")
+        
         self._webcam_button.hide()
+        
+        t0 = time.time()
         self._webcam_button.load_media()
+        load_media_time = time.time() - t0
+        print(f"[Startup] load_media() completed in {load_media_time:.2f}s")
 
         capture = self.video_processor.media_capture
         if capture and capture.isOpened():
             self.target_videos = {media_id: self._webcam_button}
             self._media_mode = "webcam"
             self._update_media_toggle_button()
+            elapsed = time.time() - t_start
+            print(f"[Startup] _load_webcam_direct() succeeded in {elapsed:.2f}s")
             return True
 
         self._webcam_button.deleteLater()
         self._webcam_button = None
+        elapsed = time.time() - t_start
+        print(f"[Startup] _load_webcam_direct() failed in {elapsed:.2f}s (capture not opened)")
         return False
 
     def _load_demo_video(self) -> bool:

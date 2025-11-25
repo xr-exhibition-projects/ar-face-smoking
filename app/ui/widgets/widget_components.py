@@ -201,26 +201,41 @@ class TargetMediaCardButton(CardButton):
             main_window.video_processor.max_frame_number = max_frames_number
 
         elif self.file_type == 'webcam':
+            import time
+            t_webcam_start = time.time()
+            print(f"[Startup] load_media() for webcam started")
+            
             res_width, res_height = self.main_window.control['WebcamMaxResSelection'].split('x')
 
+            t0 = time.time()
             if isinstance(self.webcam_index, str):
                 media_capture = cv2.VideoCapture(self.webcam_index, cv2.CAP_DSHOW)
                 if not media_capture.isOpened():
                     media_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             else:
                 media_capture = cv2.VideoCapture(self.webcam_index, self.webcam_backend)
+            print(f"[Startup] VideoCapture created in {time.time() - t0:.2f}s")
 
+            t0 = time.time()
             if media_capture.isOpened():
                 media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(res_width))
                 media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(res_height))
+            print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999
+            t0 = time.time()
             _, frame = misc_helpers.read_frame(media_capture)
+            read_frame_time = time.time() - t0
+            print(f"[Startup] First frame read from webcam in {read_frame_time:.2f}s (this is usually the slowest step)")
+            
             main_window.video_processor.media_capture = media_capture
             self.media_capture = media_capture
             main_window.video_processor.fps = media_capture.get(cv2.CAP_PROP_FPS)
             main_window.video_processor.max_frame_number = max_frames_number
+            
+            elapsed = time.time() - t_webcam_start
+            print(f"[Startup] load_media() for webcam completed in {elapsed:.2f}s")
 
         if frame is not None:
             main_window.scene.clear()
