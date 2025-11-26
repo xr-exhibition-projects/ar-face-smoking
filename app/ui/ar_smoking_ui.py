@@ -1893,6 +1893,14 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def keyPressEvent(self, event):
         """Обработка горячих клавиш. Переопределяет метод из MainWindow."""
+        key = event.key()
+        
+        # F11 - переключение полноэкранного режима
+        if key == QtCore.Qt.Key_F11:
+            from app.ui.widgets.actions import video_control_actions
+            video_control_actions.view_fullscreen(self)
+            return
+        
         # Проверяем комбинацию Ctrl+Alt+Shift+D для открытия ControlPanel
         # Работает независимо от раскладки клавиатуры
         modifiers = event.modifiers()
@@ -1904,7 +1912,6 @@ class ARSmokingWindow(main_ui.MainWindow):
             # Получаем физический код клавиши (nativeVirtualKey для Windows)
             # Это позволяет работать независимо от раскладки
             native_key = event.nativeVirtualKey() if hasattr(event, 'nativeVirtualKey') else None
-            key = event.key()
             
             # Проверяем как виртуальный код (Key_D), так и физический (68 для D на Windows)
             # Также проверяем Key_V, так как в русской раскладке D может быть представлена как V
