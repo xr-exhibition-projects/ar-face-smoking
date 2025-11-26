@@ -350,7 +350,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         self.configButton = QtWidgets.QPushButton("⚙", self)
         self.configButton.setFixedSize(42, 42)
-        self.configButton.setToolTip("Настройки")
+        self.configButton.setToolTip("Настройки (Ctrl+Alt+Shift+D)")
         self.configButton.setStyleSheet(
             """
             QPushButton {
@@ -366,6 +366,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             """
         )
         self.configButton.clicked.connect(self._open_control_options_window)
+        # Скрываем кнопку настроек - используем горячую клавишу Ctrl+Alt+Shift+D
+        self.configButton.hide()
 
         self.mediaToggleButton = QtWidgets.QPushButton(self)
         self.mediaToggleButton.setCheckable(True)
@@ -1527,8 +1529,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         QtCore.QTimer.singleShot(200, show_uporotsya_button)
         
-        # Показываем кнопку настроек
-        self.configButton.show()
+        # Кнопка настроек скрыта - используем горячую клавишу Ctrl+Alt+Shift+D
+        # self.configButton.show()
 
     def _update_uporotsya_button_icon(self, start: bool) -> None:
         pixmap = self._start_pixmap if start else self._finish_pixmap
@@ -1857,12 +1859,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self.welcomeOverlay:
             self.welcomeOverlay.hide()
         self.buttonUport.show()
-        self.configButton.show()
+        # Кнопка настроек скрыта - используем горячую клавишу Ctrl+Alt+Shift+D
+        # self.configButton.show()
         # Кнопка переключения камера/видео скрыта
         # if self.mediaToggleButton:
         #     self.mediaToggleButton.show()
         #     self._update_media_toggle_button()
-        self._position_config_button()
+        # Кнопка настроек скрыта, поэтому не позиционируем её
+        # self._position_config_button()
         QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
         QtCore.QTimer.singleShot(0, self._ensure_playing)
         QtCore.QTimer.singleShot(0, lambda: layout_actions.fit_image_to_view_onchange(self))
@@ -1886,6 +1890,34 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.control_window.show()
         self.control_window.raise_()
         self.control_window.activateWindow()
+
+    def keyPressEvent(self, event):
+        """Обработка горячих клавиш. Переопределяет метод из MainWindow."""
+        # Проверяем комбинацию Ctrl+Alt+Shift+D для открытия ControlPanel
+        # Работает независимо от раскладки клавиатуры
+        modifiers = event.modifiers()
+        has_ctrl = modifiers & QtCore.Qt.KeyboardModifier.ControlModifier
+        has_alt = modifiers & QtCore.Qt.KeyboardModifier.AltModifier
+        has_shift = modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier
+        
+        if has_ctrl and has_alt and has_shift:
+            # Получаем физический код клавиши (nativeVirtualKey для Windows)
+            # Это позволяет работать независимо от раскладки
+            native_key = event.nativeVirtualKey() if hasattr(event, 'nativeVirtualKey') else None
+            key = event.key()
+            
+            # Проверяем как виртуальный код (Key_D), так и физический (68 для D на Windows)
+            # Также проверяем Key_V, так как в русской раскладке D может быть представлена как V
+            is_d_key = (key == QtCore.Qt.Key_D or 
+                       key == QtCore.Qt.Key_V or  # В русской раскладке D -> В (Key_V)
+                       (native_key and native_key == 68))  # Физический код D на Windows
+            
+            if is_d_key:
+                self._open_control_options_window()
+                return
+        
+        # Вызываем родительский метод для обработки остальных горячих клавиш
+        super().keyPressEvent(event)
 
     def _on_control_window_closed(self) -> None:
         if not self.control_window:
