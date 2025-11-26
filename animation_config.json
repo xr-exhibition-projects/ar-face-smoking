@@ -1,47 +1,62 @@
 {
   "timings": {
     "stage1": {
-      "show_finish_button_delay_ms": 4000
+      "duration_ms": 4000
     },
     "stage2": {
-      "duration_ms": 7000
+      "duration_ms": 2000
+    },
+    "stage3": {
+      "duration_ms": 5000
     }
   },
   "animation_stages": {
     "stage1": {
       "start_intensity": 0.0,
-      "end_intensity": 0.9
+      "end_intensity": 1.0
     },
     "stage2": {
-      "start_intensity": 0.9,
+      "start_intensity": 1.0,
+      "end_intensity": 1.0
+    },
+    "stage3": {
+      "start_intensity": 1.0,
       "end_intensity": 1.0
     }
   },
   "zombie_overlay": {
     "stage1": {
       "color_start": 0.0,
-      "color_end": 0.5,
+      "color_end": 0.0,
       "texture_start": 0.0,
-      "texture_end": 0.5
+      "texture_end": 0.0
     },
     "stage2": {
-      "color_start": 0.5,
+      "color_start": 0.0,
       "color_end": 0.8,
-      "texture_start": 0.5,
+      "texture_start": 0.0,
       "texture_end": 0.8
+    },
+    "stage3": {
+      "color_start": 0.8,
+      "color_end": 1.0,
+      "texture_start": 0.8,
+      "texture_end": 1.0
     }
   },
   "_comment": {
     "timings": {
-      "stage1.show_finish_button_delay_ms": "Задержка перед показом кнопки 'СЛЕЗТЬ' в первом этапе (в миллисекундах). Также используется как длительность анимации первого этапа.",
-      "stage2.duration_ms": "Длительность анимации второго этапа (в миллисекундах). Анимация от start_intensity до end_intensity из animation_stages.stage2. После завершения анимации сразу показывается экран 'СМЕРТЬ НЕИЗБЕЖНА'."
+      "stage1.duration_ms": "Длительность первого этапа (от 'УПОРОТЬСЯ' до появления кнопки 'СЛЕЗТЬ') в миллисекундах.",
+      "stage2.duration_ms": "Длительность второго этапа (от 'СЛЕЗТЬ' до 'НЕВОЗМОЖНО') в миллисекундах.",
+      "stage3.duration_ms": "Длительность третьего этапа (от 'НЕВОЗМОЖНО' до 'СМЕРТЬ НЕИЗБЕЖНА') в миллисекундах."
     },
     "animation_stages": {
-      "stage1": "Этап 1: от «УПОРОТЬСЯ» до появления кнопки «СЛЕЗТЬ». Длительность анимации и задержка перед показом кнопки задаются в timings.stage1.show_finish_button_delay_ms.",
-      "stage2": "Этап 2: запускается сразу после нажатия «СЛЕЗТЬ» (когда показывается надпись «НЕВОЗМОЖНО»). Анимация от start_intensity до end_intensity за длительность timings.stage2.duration_ms. После завершения анимации сразу показывается экран 'СМЕРТЬ НЕИЗБЕЖНА'."
+      "stage1": "Этап 1: от «УПОРОТЬСЯ» до появления кнопки «СЛЕЗТЬ». Интенсивность эффекта старения от start_intensity до end_intensity.",
+      "stage2": "Этап 2: от «СЛЕЗТЬ» до «НЕВОЗМОЖНО». Интенсивность эффекта старения от start_intensity до end_intensity.",
+      "stage3": "Этап 3: от «НЕВОЗМОЖНО» до «СМЕРТЬ НЕИЗБЕЖНА». Интенсивность эффекта старения от start_intensity до end_intensity."
     },
     "zombie_overlay": {
-      "stageX": "Определяет диапазон проявления второй текстуры на этапе. color_start/color_end и texture_start/texture_end (0.0-1.0+) умножают значения ползунков Zombie Texture в начале/конце стадии; значения интерполируются по мере движения анимации."
+      "stageX": "Определяет диапазон проявления эффекта зомби на этапе. color_start/color_end и texture_start/texture_end (0.0-1.0) умножают значения ползунков Zombie Texture в начале/конце стадии; значения интерполируются по мере движения анимации."
     }
   }
 }
