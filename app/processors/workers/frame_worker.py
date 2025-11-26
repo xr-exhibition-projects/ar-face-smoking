@@ -650,78 +650,277 @@ class FrameWorker(threading.Thread):
                 prev_face = torch.mul(prev_face, 1-alpha)
                 swap = torch.add(swap, prev_face)
 
+        # Применяем эффекты старения и зомби отдельно, затем смешиваем
+        
+        # Сохраняем оригинальное лицо для эффектов старения и зомби
+        # (они должны применяться к оригинальному лицу, а не к уже свапнутому)
+        original_face_for_effects = original_face_512.clone()
+        
+        # Конвертируем swap в float для обработки
+        texture_canvas = swap.clone()
+        if texture_canvas.dtype == torch.uint8:
+            texture_canvas = texture_canvas.float()
+        
+        target_size = int(texture_canvas.shape[-1])
+        from app.processors.utils import texture_transfer, faceutil
+        
+        # ========== ЭФФЕКТ СТАРЕНИЯ (old_face) ==========
+        # Используем параметры animation_stages и face swap вместо texture transfer
+        aging_intensity = 0.0
+        if hasattr(self.main_window, "get_aging_factors"):
+            aging_intensity, _ = self.main_window.get_aging_factors()
+        
+        # Применяем face swap для эффекта старения, если есть сила эффекта
+        if aging_intensity > 0:
+            # Debug output
+            if hasattr(self.main_window, "_current_stage"):
+                print(f"[Aging Effect] Stage: {self.main_window._current_stage}, intensity: {aging_intensity:.3f}")
+            try:
+                # Получаем embedding из old_face для face swap
+                swapper_model = parameters.get('SwapModelSelection', 'Inswapper128')
+                arcface_model = self.models_processor.get_arcface_model(swapper_model)
+                print(f"[Aging Effect] Getting embedding with swapper_model={swapper_model}, arcface_model={arcface_model}")
+                aging_embedding = self.models_processor.get_aging_embedding(arcface_model)
+                
+                if aging_embedding is not None and len(aging_embedding) > 0:
+                    print(f"[Aging Effect] Embedding found, shape={aging_embedding.shape}")
+                    # Применяем face swap с old_face напрямую
+                    # Используем оригинальное лицо original_face_512 (не свапнутое!)
+                    aging_s_e = aging_embedding
+                    aging_t_e = None  # Не используем target embedding для старения
+                    
+                    # Выполняем face swap используя оригинальное лицо пользователя
+                    input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(
+                        original_faces, swapper_model, False, aging_s_e, aging_t_e, parameters
+                    )
+                    
+                    # Optional Scaling
+                    if parameters.get('FaceAdjEnableToggle', False):
+                        input_face_affined = v2.functional.affine(
+                            input_face_affined, 0, (0, 0), 
+                            1 + parameters.get('FaceScaleAmountSlider', 0) / 100, 0, 
+                            center=(dim*128/2, dim*128/2), 
+                            interpolation=v2.InterpolationMode.BILINEAR
+                        )
+                    
+                    itex = 1
+                    if parameters.get('StrengthEnableToggle', False):
+                        itex = ceil(parameters.get('StrengthAmountSlider', 100) / 100.)
+                    
+                    # Create empty output image and preprocess it for swapping
+                    output_size = int(128 * dim)
+                    output = torch.zeros((output_size, output_size, 3), dtype=torch.float32, device=self.models_processor.device)
+                    input_face_affined_swap = input_face_affined.permute(1, 2, 0)
+                    input_face_affined_swap = torch.div(input_face_affined_swap, 255.0)
+                    
+                    # Используем оригинальное лицо для face swap со старением
+                    aging_swap, _ = self.get_swapped_and_prev_face(
+                        output, input_face_affined_swap, original_face_for_effects, latent, itex, dim, swapper_model, False, parameters
+                    )
+                    
+                    # Усиливаем морщины после face swap - более агрессивное усиление
+                    if aging_intensity > 0:
+                        from torchvision.transforms.functional import gaussian_blur
+                        aging_swap_float = aging_swap.float()
+                        
+                        # gaussian_blur ожидает формат [batch, channels, height, width]
+                        # aging_swap_float имеет формат [channels, height, width]
+                        aging_swap_batch = aging_swap_float.unsqueeze(0)  # [1, 3, 512, 512]
+                        
+                        # Многоуровневое усиление морщин для более сильного проявления
+                        # Уровень 1: Мелкие детали (тонкие морщины)
+                        blurred_fine = gaussian_blur(
+                            aging_swap_batch,
+                            kernel_size=[3, 3],
+                            sigma=[0.5, 0.5]
+                        ).squeeze(0)  # [3, 512, 512]
+                        high_pass_fine = aging_swap_float - blurred_fine
+                        
+                        # Уровень 2: Средние детали (глубокие морщины)
+                        blurred_medium = gaussian_blur(
+                            aging_swap_batch,
+                            kernel_size=[7, 7],
+                            sigma=[1.5, 1.5]
+                        ).squeeze(0)  # [3, 512, 512]
+                        high_pass_medium = aging_swap_float - blurred_medium
+                        
+                        # Уровень 3: Крупные детали (складки)
+                        blurred_coarse = gaussian_blur(
+                            aging_swap_batch,
+                            kernel_size=[11, 11],
+                            sigma=[2.5, 2.5]
+                        ).squeeze(0)  # [3, 512, 512]
+                        high_pass_coarse = aging_swap_float - blurred_coarse
+                        
+                        # Комбинируем все уровни с разными весами
+                        # Мелкие детали - максимальное усиление
+                        fine_boost = 2.0 + aging_intensity * 3.0  # До 5x
+                        # Средние детали - сильное усиление
+                        medium_boost = 1.5 + aging_intensity * 2.5  # До 4x
+                        # Крупные детали - умеренное усиление
+                        coarse_boost = 1.0 + aging_intensity * 2.0  # До 3x
+                        
+                        # Применяем усиление с учетом силы эффекта
+                        enhanced_aging_face = aging_swap_float
+                        enhanced_aging_face += high_pass_fine * fine_boost * aging_intensity
+                        enhanced_aging_face += high_pass_medium * medium_boost * aging_intensity * 0.8
+                        enhanced_aging_face += high_pass_coarse * coarse_boost * aging_intensity * 0.6
+                        
+                        # Дополнительное контрастное усиление зон с морщинами
+                        # Вычисляем маску зон с высокой детализацией (морщины)
+                        detail_mask = torch.abs(high_pass_fine) + torch.abs(high_pass_medium) * 0.5
+                        detail_mask = detail_mask.mean(dim=0, keepdim=True)  # Усредняем по каналам
+                        detail_mask = (detail_mask - detail_mask.min()) / (detail_mask.max() - detail_mask.min() + 1e-6)
+                        detail_mask = detail_mask.expand_as(aging_swap_float)  # Расширяем до 3 каналов
+                        
+                        # Усиливаем контраст в зонах с морщинами
+                        contrast_boost = 1.0 + aging_intensity * 1.5  # До 2.5x контраста
+                        enhanced_aging_face = enhanced_aging_face * (1.0 - detail_mask * 0.3) + \
+                                             enhanced_aging_face * detail_mask * contrast_boost
+                        
+                        # Финальное ограничение значений
+                        enhanced_aging_face = torch.clamp(enhanced_aging_face, 0, 255)
+                        aging_swap = enhanced_aging_face.to(aging_swap.dtype)
+                    
+                    # Смешиваем результат face swap с оригиналом в зависимости от силы эффекта
+                    blend_strength = aging_intensity
+                    print(f"[Aging Effect] Blend strength: {blend_strength:.3f}, texture_canvas shape: {texture_canvas.shape}, aging_swap shape: {aging_swap.shape}")
+                    if blend_strength < 1.0:
+                        texture_canvas = texture_canvas * (1.0 - blend_strength) + aging_swap.float() * blend_strength
+                    else:
+                        texture_canvas = aging_swap.float()
+                    print(f"[Aging Effect] After blending, texture_canvas min: {texture_canvas.min():.2f}, max: {texture_canvas.max():.2f}")
+                else:
+                    print(f"[Aging Effect] Embedding not found or empty. aging_embedding={aging_embedding}")
+                    # Проверяем, загружено ли изображение old_face
+                    aging_ref_data = self.models_processor.get_aging_reference_image()
+                    if aging_ref_data is None:
+                        print("[Aging Effect] Reference image (old_face) not found!")
+                    else:
+                        print(f"[Aging Effect] Reference image found, but embedding generation failed")
+            except Exception as exc:
+                print(f"Aging face swap effect failed: {exc}")
+                import traceback
+                traceback.print_exc()
+        
+        # ========== ЭФФЕКТ ЗОМБИ (zombie_texture) ==========
+        # Используем параметры zombie_overlay и face swap вместо texture transfer
         zombie_texture = parameters.get("TextureStrengthSlider", 0)
         zombie_color = parameters.get("ColorStrengthSlider", 0)
-        overlay_color_factor = overlay_texture_factor = 1.0
+        overlay_color_factor = overlay_texture_factor = 0.0
         if hasattr(self.main_window, "get_zombie_overlay_factors"):
             overlay_color_factor, overlay_texture_factor = self.main_window.get_zombie_overlay_factors()
 
         zombie_color_strength = (zombie_color / 100.0) * overlay_color_factor
         zombie_texture_strength = (zombie_texture / 100.0) * overlay_texture_factor
 
+        # Применяем face swap для эффекта зомби, если есть сила эффекта
         if zombie_texture_strength > 0 or zombie_color_strength > 0:
-            ref_data = self.models_processor.get_reference_image()
-            if ref_data is not None:
-                try:
-                    from app.processors.utils import texture_transfer
-                    # ref_data может быть tuple (tensor, kps) или просто tensor
-                    if isinstance(ref_data, tuple):
-                        ref_img = ref_data[0]
-                    else:
-                        ref_img = ref_data
+            # Debug output
+            if hasattr(self.main_window, "_current_stage"):
+                print(f"[Zombie Effect] Stage: {self.main_window._current_stage}, texture_strength: {zombie_texture_strength:.3f}, color_strength: {zombie_color_strength:.3f}, base_texture: {zombie_texture}, base_color: {zombie_color}, overlay_texture: {overlay_texture_factor:.3f}, overlay_color: {overlay_color_factor:.3f}")
+            try:
+                # Получаем embedding из zombie_texture для face swap
+                swapper_model = parameters.get('SwapModelSelection', 'Inswapper128')
+                arcface_model = self.models_processor.get_arcface_model(swapper_model)
+                zombie_embedding = self.models_processor.get_zombie_embedding(arcface_model)
+                
+                if zombie_embedding is not None and len(zombie_embedding) > 0:
+                    # Применяем face swap с zombie_texture напрямую
+                    # Используем уже извлеченное лицо original_face_512
+                    zombie_s_e = zombie_embedding
+                    zombie_t_e = None  # Не используем target embedding для зомби
                     
-                    # Конвертируем swap в float, если он uint8
-                    texture_canvas = swap.clone()
-                    if texture_canvas.dtype == torch.uint8:
-                        texture_canvas = texture_canvas.float()
+                    # Выполняем face swap используя те же методы, что и в swap_core
+                    input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(
+                        original_faces, swapper_model, False, zombie_s_e, zombie_t_e, parameters
+                    )
                     
-                    target_size = int(texture_canvas.shape[-1])
+                    # Optional Scaling
+                    if parameters.get('FaceAdjEnableToggle', False):
+                        input_face_affined = v2.functional.affine(
+                            input_face_affined, 0, (0, 0), 
+                            1 + parameters.get('FaceScaleAmountSlider', 0) / 100, 0, 
+                            center=(dim*128/2, dim*128/2), 
+                            interpolation=v2.InterpolationMode.BILINEAR
+                        )
                     
-                    # Используем nose landmark из видео (kps_5[2]) для выравнивания
-                    target_nose_kps = np.array([kps_5[2]], dtype=np.float32)
-                    aligned = texture_transfer.align_reference_to_target_by_nose(
-                        ref_img, target_nose_kps, target_size=target_size
+                    itex = 1
+                    if parameters.get('StrengthEnableToggle', False):
+                        itex = ceil(parameters.get('StrengthAmountSlider', 100) / 100.)
+                    
+                    # Create empty output image and preprocess it for swapping
+                    output_size = int(128 * dim)
+                    output = torch.zeros((output_size, output_size, 3), dtype=torch.float32, device=self.models_processor.device)
+                    input_face_affined_swap = input_face_affined.permute(1, 2, 0)
+                    input_face_affined_swap = torch.div(input_face_affined_swap, 255.0)
+                    
+                    # Используем оригинальное лицо для face swap с зомби
+                    zombie_swap, _ = self.get_swapped_and_prev_face(
+                        output, input_face_affined_swap, original_face_for_effects, latent, itex, dim, swapper_model, False, parameters
                     )
                     
                     # Применяем occlusion mask если включен
                     if parameters.get("OccluderEnableToggle", False):
                         occluder_mask = self.models_processor.apply_occlusion(original_face_256, parameters.get("OccluderSizeSlider", 0))
-                        # Масштабируем маску до target_size
-                        from torchvision.transforms import v2
                         t_mask = v2.Resize((target_size, target_size), interpolation=v2.InterpolationMode.BILINEAR, antialias=False)
                         occluder_mask = t_mask(occluder_mask)
-                        # Применяем blur если нужно
                         blur_amount = parameters.get('OccluderXSegBlurSlider', 0)
                         if blur_amount > 0:
                             from torchvision.transforms.functional import gaussian_blur
                             kernel_size = blur_amount * 2 + 1
                             sigma = (blur_amount + 1) * 0.2
-                            occluder_mask = gaussian_blur(occluder_mask, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
-                        # Применяем маску к выровненному изображению
-                        aligned = aligned * occluder_mask
+                            occluder_mask = gaussian_blur(occluder_mask.unsqueeze(0), kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma]).squeeze(0)
+                        # Применяем маску к zombie_swap
+                        # occluder_mask имеет формат [1, 1, H, W] или [1, H, W], zombie_swap имеет формат [C, H, W] = [3, 512, 512]
+                        # Нужно привести маску к формату [1, H, W] и расширить до [3, H, W]
+                        if occluder_mask.dim() == 4:
+                            occluder_mask = occluder_mask.squeeze(0)  # [1, H, W] или [H, W]
+                        if occluder_mask.dim() == 2:
+                            occluder_mask = occluder_mask.unsqueeze(0)  # [1, H, W]
+                        # Расширяем до [3, H, W]
+                        occluder_mask_3d = occluder_mask.expand_as(zombie_swap)  # [3, H, W]
+                        zombie_swap = zombie_swap * occluder_mask_3d
                     
-                    # Конвертируем aligned в float, если нужно
-                    if aligned.dtype == torch.uint8:
-                        aligned = aligned.float()
-                    
-                    if zombie_color_strength > 0:
-                        texture_canvas = texture_transfer.transfer_color_reinhard(
-                            aligned, texture_canvas, strength=zombie_color_strength
-                        )
-                    if zombie_texture_strength > 0:
-                        texture_canvas = texture_transfer.transfer_texture_highpass(
-                            aligned, texture_canvas, strength=zombie_texture_strength
-                        )
-                    
-                    # Конвертируем обратно в исходный тип swap
-                    if swap.dtype == torch.uint8:
-                        texture_canvas = torch.clamp(texture_canvas, 0, 255).byte()
+                    # Смешиваем результат face swap с текущим canvas в зависимости от силы эффекта
+                    blend_strength = max(zombie_texture_strength, zombie_color_strength)
+                    if blend_strength < 1.0:
+                        texture_canvas = texture_canvas * (1.0 - blend_strength) + zombie_swap.float() * blend_strength
                     else:
-                        texture_canvas = torch.clamp(texture_canvas, 0, 255)
+                        texture_canvas = zombie_swap.float()
                     
-                    swap = texture_canvas
-                except Exception as exc:
-                    print(f"Zombie texture transfer failed: {exc}")
+                    # Применяем цветовую коррекцию, если нужно
+                    if zombie_color_strength > 0:
+                        from app.processors.utils import texture_transfer
+                        zombie_ref_data = self.models_processor.get_zombie_reference_image()
+                        if zombie_ref_data is not None:
+                            zombie_ref_img = zombie_ref_data[0]
+                            zombie_ref_kps = zombie_ref_data[1] if len(zombie_ref_data) > 1 else None
+                            
+                            if zombie_ref_kps is not None:
+                                zombie_aligned = texture_transfer.align_reference_to_target(
+                                    zombie_ref_img, zombie_ref_kps, target_size=target_size
+                                )
+                                if zombie_aligned.dtype == torch.uint8:
+                                    zombie_aligned = zombie_aligned.float()
+                                
+                                texture_canvas = texture_transfer.transfer_color_reinhard(
+                                    zombie_aligned, texture_canvas, strength=zombie_color_strength
+                                )
+                else:
+                    print("Zombie embedding not found, skipping zombie effect")
+            except Exception as exc:
+                print(f"Zombie face swap effect failed: {exc}")
+                import traceback
+                traceback.print_exc()
+        
+        # Конвертируем обратно в исходный тип swap
+        if swap.dtype == torch.uint8:
+            texture_canvas = torch.clamp(texture_canvas, 0, 255).byte()
+        else:
+            texture_canvas = torch.clamp(texture_canvas, 0, 255)
+        
+        swap = texture_canvas
 
         border_mask = self.get_border_mask(parameters)
 

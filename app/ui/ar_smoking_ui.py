@@ -4,6 +4,7 @@ import json
 import sys
 from functools import partial
 from pathlib import Path
+import time
 from typing import Optional, Callable, Tuple
 import uuid
 
@@ -19,9 +20,11 @@ from app.ui.widgets.actions import (
     layout_actions,
     list_view_actions,
     video_control_actions,
+    common_actions,
 )
 from app.ui.widgets import ui_workers, widget_components
 from app.ui.widgets.settings_layout_data import CAMERA_BACKENDS
+from app.ui.widgets.effect_params_layout_data import EFFECT_PARAMS_LAYOUT_DATA
 
 import cv2
 
@@ -109,8 +112,11 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.control_window: Optional[ControlOptionsWindow] = None
         
         # Animation stage tracking
-        self._current_stage: int = 0  # 0 = not started, 1 = stage1, 2 = stage2
+        self._current_stage: int = 0  # 0 = not started, 1 = stage1, 2 = stage2, 3 = stage3
         self._stage1_timer: Optional[QtCore.QTimer] = None
+        self._stage2_timer: Optional[QtCore.QTimer] = None
+        self._stage_start_time: float = 0.0
+        self._stage_duration_ms: int = 0
         
         # Load animation config
         self._animation_config = self._load_animation_config()
@@ -418,19 +424,26 @@ class ARSmokingWindow(main_ui.MainWindow):
         default_config = {
             "timings": {
                 "stage1": {
-                    "show_finish_button_delay_ms": 5000,
+                    "duration_ms": 4000,
                 },
                 "stage2": {
+                    "duration_ms": 2000,
+                },
+                "stage3": {
                     "duration_ms": 5000,
                 },
             },
             "animation_stages": {
                 "stage1": {
                     "start_intensity": 0.0,
-                    "end_intensity": 0.4,
+                    "end_intensity": 1.0,
                 },
                 "stage2": {
-                    "start_intensity": 0.4,
+                    "start_intensity": 1.0,
+                    "end_intensity": 1.0,
+                },
+                "stage3": {
+                    "start_intensity": 1.0,
                     "end_intensity": 1.0,
                 },
             },
@@ -442,10 +455,16 @@ class ARSmokingWindow(main_ui.MainWindow):
                     "texture_end": 0.0,
                 },
                 "stage2": {
-                    "color_start": 0.5,
+                    "color_start": 0.0,
                     "color_end": 0.8,
-                    "texture_start": 0.5,
+                    "texture_start": 0.0,
                     "texture_end": 0.8,
+                },
+                "stage3": {
+                    "color_start": 0.8,
+                    "color_end": 1.0,
+                    "texture_start": 0.8,
+                    "texture_end": 1.0,
                 },
             },
         }
@@ -489,8 +508,8 @@ class ARSmokingWindow(main_ui.MainWindow):
                 # Валидация timings
                 timings_default = default_config.get("timings", {})
                 for key, value in timings_default.items():
-                    if key in ("stage1", "stage2"):
-                        # stage1 и stage2 - это объекты с параметрами
+                    if key in ("stage1", "stage2", "stage3"):
+                        # stage1, stage2, stage3 - это объекты с параметрами
                         if key not in config["timings"]:
                             config["timings"][key] = value
                         else:
@@ -515,6 +534,14 @@ class ARSmokingWindow(main_ui.MainWindow):
                     if legacy_texture is not None:
                         stage_cfg["texture_start"] = stage_cfg["texture_end"] = float(legacy_texture)
             
+            # Ensure stage3 exists for backwards compatibility
+            if "stage3" not in config.get("animation_stages", {}):
+                config.setdefault("animation_stages", {})["stage3"] = default_config["animation_stages"]["stage3"]
+            if "stage3" not in config.get("zombie_overlay", {}):
+                config.setdefault("zombie_overlay", {})["stage3"] = default_config["zombie_overlay"]["stage3"]
+            if "stage3" not in config.get("timings", {}):
+                config.setdefault("timings", {})["stage3"] = default_config["timings"]["stage3"]
+            
             print(f"Загружена конфигурация анимации из: {config_path}")
             return config
         except json.JSONDecodeError as e:
@@ -525,20 +552,38 @@ class ARSmokingWindow(main_ui.MainWindow):
             return default_config
 
     def _compute_stage_progress(self) -> float:
-        if self._current_stage <= 0:
+        """Вычисляет прогресс текущего этапа (0.0 - 1.0) на основе таймеров."""
+        if self._current_stage <= 0 or self._stage_duration_ms <= 0 or self._stage_start_time <= 0:
             return 0.0
+        
+        elapsed_ms = (time.monotonic() - self._stage_start_time) * 1000.0
+        return max(0.0, min(1.0, elapsed_ms / float(self._stage_duration_ms)))
+
+    def get_aging_factors(self) -> Tuple[float, float]:
+        """Возвращает множители для эффекта старения (old_face) исходя из текущего этапа анимации."""
+        if self._current_stage <= 0:
+            return 0.0, 0.0
+
         stage_key = f"stage{self._current_stage}"
-        stage_cfg = self._animation_stages.get(stage_key)
+        stage_cfg = self._animation_stages.get(stage_key, {})
+        
         if not stage_cfg:
-            return 1.0
+            print(f"[get_aging_factors] No config for {stage_key}")
+            return 0.0, 0.0
+        
         start_intensity = float(stage_cfg.get("start_intensity", 0.0))
         end_intensity = float(stage_cfg.get("end_intensity", start_intensity))
-        span = max(1e-6, end_intensity - start_intensity)
-        progress = (self._fade_progress - start_intensity) / span
-        return max(0.0, min(1.0, progress))
+        
+        stage_progress = self._compute_stage_progress()
+        current_intensity = start_intensity + (end_intensity - start_intensity) * stage_progress
+        current_intensity = max(0.0, min(1.0, current_intensity))
+        
+        print(f"[get_aging_factors] Stage: {self._current_stage}, start: {start_intensity}, end: {end_intensity}, progress: {stage_progress:.2f}, current: {current_intensity:.2f}")
+        
+        return current_intensity, current_intensity
 
     def get_zombie_overlay_factors(self) -> Tuple[float, float]:
-        """Возвращает множители для второй текстуры исходя из текущего этапа анимации."""
+        """Возвращает множители для эффекта зомби (zombie_texture) исходя из текущего этапа анимации."""
         overlay_cfg = self._animation_config.get("zombie_overlay", {})
         if self._current_stage <= 0:
             return 0.0, 0.0
@@ -546,17 +591,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage_key = f"stage{self._current_stage}"
         stage_cfg = overlay_cfg.get(stage_key, {})
 
-        stage_progress = self._compute_stage_progress()
+        # Для упрощения используем end значения текущего этапа
+        # В будущем можно добавить плавную интерполяцию на основе времени таймера
+        color_end = float(stage_cfg.get("color_end", 0.0))
+        texture_end = float(stage_cfg.get("texture_end", 0.0))
 
-        color_start = float(stage_cfg.get("color_start", stage_cfg.get("color_end", 1.0)))
-        color_end = float(stage_cfg.get("color_end", color_start))
-        texture_start = float(stage_cfg.get("texture_start", stage_cfg.get("texture_end", 1.0)))
-        texture_end = float(stage_cfg.get("texture_end", texture_start))
-
-        color_multiplier = color_start + (color_end - color_start) * stage_progress
-        texture_multiplier = texture_start + (texture_end - texture_start) * stage_progress
-
-        return max(0.0, color_multiplier), max(0.0, texture_multiplier)
+        return max(0.0, color_end), max(0.0, texture_end)
 
     # ------------------------------------------------------------------ #
     #  Initialization helpers
@@ -792,13 +832,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self._current_stage != 1:
             return
 
-        # Переход сразу ко второму этапу (мгновенно показываем "Невозможно")
+        # Переход ко второму этапу
         self._second_press_triggered = True
         self._current_stage = 2
         self._stop_face_fade()
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
-        self._show_impossible_message()
         self._start_stage2_animation()
 
     def _reset_swap_state(self) -> None:
@@ -1095,39 +1134,49 @@ class ARSmokingWindow(main_ui.MainWindow):
         return super().eventFilter(obj, event)
 
     def _start_stage1_animation(self) -> None:
-        """Запускает первый этап анимации: 0.0 -> 0.4"""
-        stage_config = self._animation_stages.get("stage1", {})
-        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.0)))
-        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 0.4)))
+        """Запускает первый этап анимации: от "УПОРОТЬСЯ" до появления кнопки "СЛЕЗТЬ" """
         timings = self._animation_config.get("timings", {})
         stage1_timings = timings.get("stage1", {})
-        show_button_delay = stage1_timings.get("show_finish_button_delay_ms", 5000)
-        # Используем show_finish_button_delay_ms как длительность анимации
-        duration_ms = show_button_delay
-        
-        self._fade_progress = start_intensity
-        self._start_fade_timer(end_intensity, duration_ms)
+        duration_ms = stage1_timings.get("duration_ms", 4000)
         
         # Запускаем таймер для показа кнопки "слезть"
+        self._stage_start_time = time.monotonic()
+        self._stage_duration_ms = duration_ms
         if self._stage1_timer:
             self._stage1_timer.stop()
             self._stage1_timer.deleteLater()
         self._stage1_timer = QtCore.QTimer(self)
         self._stage1_timer.setSingleShot(True)
         self._stage1_timer.timeout.connect(self._show_finish_button)
-        self._stage1_timer.start(show_button_delay)
+        self._stage1_timer.start(duration_ms)
     
     def _start_stage2_animation(self) -> None:
-        """Запускает второй этап анимации: от надписи 'Невозможно' до финала."""
-        stage_config = self._animation_stages.get("stage2", {})
-        start_intensity = max(0.0, min(1.0, stage_config.get("start_intensity", 0.9)))
-        end_intensity = max(0.0, min(1.0, stage_config.get("end_intensity", 1.0)))
+        """Запускает второй этап анимации: от "СЛЕЗТЬ" до "НЕВОЗМОЖНО" """
         timings = self._animation_config.get("timings", {})
         stage2_timings = timings.get("stage2", {})
-        duration_ms = stage2_timings.get("duration_ms", 5000)
+        duration_ms = stage2_timings.get("duration_ms", 2000)
         
-        self._fade_progress = start_intensity
-        self._start_fade_timer(end_intensity, duration_ms, on_complete=self._on_stage2_complete)
+        # Запускаем таймер для показа надписи "Невозможно" и перехода к stage3
+        self._stage_start_time = time.monotonic()
+        self._stage_duration_ms = duration_ms
+        if self._stage2_timer:
+            self._stage2_timer.stop()
+            self._stage2_timer.deleteLater()
+        self._stage2_timer = QtCore.QTimer(self)
+        self._stage2_timer.setSingleShot(True)
+        self._stage2_timer.timeout.connect(self._on_stage2_complete)
+        self._stage2_timer.start(duration_ms)
+    
+    def _start_stage3_animation(self) -> None:
+        """Запускает третий этап анимации: от "НЕВОЗМОЖНО" до "СМЕРТЬ НЕИЗБЕЖНА" """
+        timings = self._animation_config.get("timings", {})
+        stage3_timings = timings.get("stage3", {})
+        duration_ms = stage3_timings.get("duration_ms", 5000)
+        
+        # Запускаем таймер для показа экрана смерти
+        self._stage_start_time = time.monotonic()
+        self._stage_duration_ms = duration_ms
+        self._start_fade_timer(1.0, duration_ms, on_complete=self._on_stage3_complete)
 
     def _start_fade_timer(self, target_intensity: float, duration_ms: int, on_complete: Optional[Callable[[], None]] = None) -> None:
         if self._fade_timer:
@@ -1193,8 +1242,15 @@ class ARSmokingWindow(main_ui.MainWindow):
                 self.buttonUport.show()
     
     def _on_stage2_complete(self) -> None:
-        """Вызывается после завершения второго этапа - сразу показывает экран смерти"""
+        """Вызывается после завершения второго этапа - показываем "НЕВОЗМОЖНО" и запускаем stage3"""
         if self._current_stage == 2:
+            self._show_impossible_message()
+            self._current_stage = 3
+            self._start_stage3_animation()
+    
+    def _on_stage3_complete(self) -> None:
+        """Вызывается после завершения третьего этапа - показываем экран смерти"""
+        if self._current_stage == 3:
             self._show_death_screen()
     
     def _stop_face_fade(self, reset_progress: bool = False) -> None:
@@ -1206,6 +1262,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._stage1_timer.stop()
             self._stage1_timer.deleteLater()
             self._stage1_timer = None
+        if self._stage2_timer:
+            self._stage2_timer.stop()
+            self._stage2_timer.deleteLater()
+            self._stage2_timer = None
         self._cancel_death_delay_timer()
         if reset_progress:
             # Сбрасываем на стартовую интенсивность первого этапа
@@ -1689,7 +1749,235 @@ class ARSmokingWindow(main_ui.MainWindow):
                 self._control_options_widget = panel_widget
             self.controlOptionsDockWidget = None
 
+        # Add Effect Params tab if not exists
+        if self._control_options_widget and hasattr(self, "tabWidget"):
+            self._add_effect_params_tab()
+
         return bool(self._control_options_widget and shiboken6.isValid(self._control_options_widget))
+    
+    def _add_effect_params_tab(self) -> None:
+        """Добавляет вкладку Effect Params в Control Panel."""
+        if not hasattr(self, "tabWidget"):
+            return
+        
+        # Check if tab already exists
+        for i in range(self.tabWidget.count()):
+            if self.tabWidget.tabText(i) == "Effect Params":
+                return
+        
+        # Create new tab
+        effect_params_tab = QtWidgets.QWidget()
+        effect_params_tab.setObjectName("effect_params_tab")
+        effect_params_layout = QtWidgets.QVBoxLayout(effect_params_tab)
+        effect_params_layout.setObjectName("effect_params_layout")
+        effect_params_widgets_layout = QtWidgets.QVBoxLayout()
+        effect_params_widgets_layout.setObjectName("effectParamsWidgetsLayout")
+        effect_params_layout.addLayout(effect_params_widgets_layout)
+        
+        # Add widgets to the tab
+        layout_actions.add_widgets_to_tab_layout(
+            self, 
+            LAYOUT_DATA=EFFECT_PARAMS_LAYOUT_DATA, 
+            layoutWidget=effect_params_widgets_layout, 
+            data_type='control'
+        )
+        
+        # Add tab to tabWidget
+        self.tabWidget.addTab(effect_params_tab, "Effect Params")
+        
+        # Connect sliders to update config
+        self._connect_effect_params_sliders()
+        
+        # Create and connect Save button manually
+        save_group_box = None
+        for i in range(effect_params_widgets_layout.count()):
+            item = effect_params_widgets_layout.itemAt(i)
+            if item and item.widget():
+                widget = item.widget()
+                if isinstance(widget, widget_components.FormGroupBox) and widget.title() == "Save Config":
+                    save_group_box = widget
+                    break
+        
+        if save_group_box:
+            save_layout = save_group_box.layout()
+            if save_layout:
+                # Remove existing widgets if any
+                while save_layout.count():
+                    item = save_layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+                
+                # Create save button
+                save_button = QtWidgets.QPushButton("Save Animation Config")
+                save_button.setToolTip("Save current animation parameters to animation_config.json file.")
+                save_button.clicked.connect(self._save_animation_config)
+                save_layout.addWidget(save_button)
+        
+        # Load current values from config
+        self._load_effect_params_from_config()
+    
+    def _connect_effect_params_sliders(self) -> None:
+        """Подключает слайдеры к обновлению конфига в реальном времени."""
+        slider_mappings = {
+            'AgingStage1StartSlider': ('animation_stages', 'stage1', 'start_intensity'),
+            'AgingStage1EndSlider': ('animation_stages', 'stage1', 'end_intensity'),
+            'AgingStage2StartSlider': ('animation_stages', 'stage2', 'start_intensity'),
+            'AgingStage2EndSlider': ('animation_stages', 'stage2', 'end_intensity'),
+            'AgingStage3StartSlider': ('animation_stages', 'stage3', 'start_intensity'),
+            'AgingStage3EndSlider': ('animation_stages', 'stage3', 'end_intensity'),
+            'ZombieStage1StartSlider': ('zombie_overlay', 'stage1', 'texture_start'),
+            'ZombieStage1EndSlider': ('zombie_overlay', 'stage1', 'texture_end'),
+            'ZombieStage2StartSlider': ('zombie_overlay', 'stage2', 'texture_start'),
+            'ZombieStage2EndSlider': ('zombie_overlay', 'stage2', 'texture_end'),
+            'ZombieStage3StartSlider': ('zombie_overlay', 'stage3', 'texture_start'),
+            'ZombieStage3EndSlider': ('zombie_overlay', 'stage3', 'texture_end'),
+            'Stage1DurationSlider': ('timings', 'stage1', 'duration_ms'),
+            'Stage2DurationSlider': ('timings', 'stage2', 'duration_ms'),
+            'Stage3DurationSlider': ('timings', 'stage3', 'duration_ms'),
+        }
+        
+        for slider_name, (config_section, stage_key, param_key) in slider_mappings.items():
+            if slider_name in self.parameter_widgets:
+                widget = self.parameter_widgets[slider_name]
+                # Connect value changed signal
+                if hasattr(widget, 'valueChanged'):
+                    def make_handler(section, stage_key, param_key, is_intensity):
+                        def handler(value):
+                            normalized_value = value / 100.0 if is_intensity else value
+                            self._update_animation_config_value(section, stage_key, param_key, normalized_value)
+                        return handler
+                    widget.valueChanged.connect(
+                        make_handler(config_section, stage_key, param_key, 'Intensity' in slider_name)
+                    )
+    
+    def _update_animation_config_value(self, section: str, stage_key: str, param_key: str, value: float) -> None:
+        """Обновляет значение в конфиге анимации."""
+        if section not in self._animation_config:
+            self._animation_config[section] = {}
+        if stage_key not in self._animation_config[section]:
+            self._animation_config[section][stage_key] = {}
+        self._animation_config[section][stage_key][param_key] = value
+        
+        # For zombie_overlay, also update color_start/color_end to match texture
+        if section == "zombie_overlay" and param_key in ("texture_start", "texture_end"):
+            color_key = param_key.replace("texture", "color")
+            self._animation_config[section][stage_key][color_key] = value
+        
+        # Reload stages
+        if section == "animation_stages":
+            self._animation_stages = self._animation_config.get("animation_stages", {})
+    
+    def _load_effect_params_from_config(self) -> None:
+        """Загружает значения из конфига в слайдеры."""
+        # Aging effect
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            stage_cfg = self._animation_stages.get(stage_key, {})
+            start_val = int(float(stage_cfg.get("start_intensity", 0.0)) * 100)
+            end_val = int(float(stage_cfg.get("end_intensity", 0.0)) * 100)
+            
+            if f'AgingStage{stage_num}StartSlider' in self.parameter_widgets:
+                self.parameter_widgets[f'AgingStage{stage_num}StartSlider'].set_value(start_val)
+            if f'AgingStage{stage_num}EndSlider' in self.parameter_widgets:
+                self.parameter_widgets[f'AgingStage{stage_num}EndSlider'].set_value(end_val)
+        
+        # Zombie effect
+        zombie_overlay = self._animation_config.get("zombie_overlay", {})
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            stage_cfg = zombie_overlay.get(stage_key, {})
+            start_val = int(float(stage_cfg.get("texture_start", 0.0)) * 100)
+            end_val = int(float(stage_cfg.get("texture_end", 0.0)) * 100)
+            
+            if f'ZombieStage{stage_num}StartSlider' in self.parameter_widgets:
+                self.parameter_widgets[f'ZombieStage{stage_num}StartSlider'].set_value(start_val)
+            if f'ZombieStage{stage_num}EndSlider' in self.parameter_widgets:
+                self.parameter_widgets[f'ZombieStage{stage_num}EndSlider'].set_value(end_val)
+        
+        # Stage timings
+        timings = self._animation_config.get("timings", {})
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            stage_timings = timings.get(stage_key, {})
+            duration_val = int(stage_timings.get("duration_ms", 4000))
+            
+            if f'Stage{stage_num}DurationSlider' in self.parameter_widgets:
+                self.parameter_widgets[f'Stage{stage_num}DurationSlider'].set_value(duration_val)
+    
+    def _save_animation_config(self) -> None:
+        """Сохраняет текущую конфигурацию анимации в файл."""
+        # Determine config path
+        if getattr(sys, "frozen", False):
+            base_path = Path(sys.executable).parent
+            config_path = base_path / ANIMATION_CONFIG_PATH
+        else:
+            project_root = Path(__file__).resolve().parents[2]
+            config_path = project_root / ANIMATION_CONFIG_PATH
+        
+        try:
+            # Update config with current values from sliders
+            self._update_config_from_sliders()
+            
+            # Save to file
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(self._animation_config, f, indent=2, ensure_ascii=False)
+            
+            print(f"Конфигурация анимации сохранена в: {config_path}")
+            QtWidgets.QMessageBox.information(
+                self, 
+                "Сохранено", 
+                f"Конфигурация анимации сохранена в:\n{config_path}"
+            )
+        except Exception as e:
+            print(f"Ошибка при сохранении конфигурации: {e}")
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "Ошибка", 
+                f"Не удалось сохранить конфигурацию:\n{e}"
+            )
+    
+    def _update_config_from_sliders(self) -> None:
+        """Обновляет конфиг из значений слайдеров."""
+        # Aging effect
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            if stage_key not in self._animation_config["animation_stages"]:
+                self._animation_config["animation_stages"][stage_key] = {}
+            
+            if f'AgingStage{stage_num}StartSlider' in self.parameter_widgets:
+                start_val = self.parameter_widgets[f'AgingStage{stage_num}StartSlider'].value() / 100.0
+                self._animation_config["animation_stages"][stage_key]["start_intensity"] = start_val
+            if f'AgingStage{stage_num}EndSlider' in self.parameter_widgets:
+                end_val = self.parameter_widgets[f'AgingStage{stage_num}EndSlider'].value() / 100.0
+                self._animation_config["animation_stages"][stage_key]["end_intensity"] = end_val
+        
+        # Zombie effect
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            if stage_key not in self._animation_config["zombie_overlay"]:
+                self._animation_config["zombie_overlay"][stage_key] = {}
+            
+            if f'ZombieStage{stage_num}StartSlider' in self.parameter_widgets:
+                start_val = self.parameter_widgets[f'ZombieStage{stage_num}StartSlider'].value() / 100.0
+                self._animation_config["zombie_overlay"][stage_key]["texture_start"] = start_val
+                self._animation_config["zombie_overlay"][stage_key]["color_start"] = start_val
+            if f'ZombieStage{stage_num}EndSlider' in self.parameter_widgets:
+                end_val = self.parameter_widgets[f'ZombieStage{stage_num}EndSlider'].value() / 100.0
+                self._animation_config["zombie_overlay"][stage_key]["texture_end"] = end_val
+                self._animation_config["zombie_overlay"][stage_key]["color_end"] = end_val
+        
+        # Stage timings
+        for stage_num in [1, 2, 3]:
+            stage_key = f"stage{stage_num}"
+            if stage_key not in self._animation_config["timings"]:
+                self._animation_config["timings"][stage_key] = {}
+            
+            if f'Stage{stage_num}DurationSlider' in self.parameter_widgets:
+                duration_val = self.parameter_widgets[f'Stage{stage_num}DurationSlider'].value()
+                self._animation_config["timings"][stage_key]["duration_ms"] = duration_val
+        
+        # Reload stages
+        self._animation_stages = self._animation_config.get("animation_stages", {})
 
     def preprocess_frame_for_display(self, frame: np.ndarray) -> np.ndarray:
         height, width = frame.shape[:2]
