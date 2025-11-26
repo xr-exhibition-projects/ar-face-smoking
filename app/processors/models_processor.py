@@ -284,8 +284,13 @@ class ModelsProcessor(QtCore.QObject):
         self._reference_image_path = None
         self._reference_image_mtime = None
 
-    def _find_reference_image_path(self) -> Optional[Path]:
-        """Ищет reference image для zombie texture в assets/images."""
+    def _find_reference_image_path(self, image_type: str = "zombie") -> Optional[Path]:
+        """
+        Ищет reference image в assets/images.
+        
+        Args:
+            image_type: "aging" для old_face, "zombie" для zombie_texture
+        """
         import sys
         
         # Определяем базовый путь
@@ -308,47 +313,53 @@ class ModelsProcessor(QtCore.QObject):
         ]
         exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
         
-        # Сначала ищем файлы с именами reference.*
-        reference_names = ["reference", "reference_image", "zombie_texture", "second_face"]
-        for root in candidates:
-            if not root.exists() or not root.is_dir():
-                continue
-            for ref_name in reference_names:
-                for ext in exts:
-                    ref_file = root / f"{ref_name}{ext}"
-                    if ref_file.exists() and ref_file.is_file():
-                        return ref_file
+        if image_type == "aging":
+            # Ищем old_face.* для эффекта старения
+            old_face_names = ["old_face"]
+            for root in candidates:
+                if not root.exists() or not root.is_dir():
+                    continue
+                for old_name in old_face_names:
+                    for ext in exts:
+                        old_file = root / f"{old_name}{ext}"
+                        if old_file.exists() and old_file.is_file():
+                            return old_file
+        else:
+            # Ищем zombie_texture.* для эффекта зомби
+            zombie_names = ["zombie_texture", "reference", "reference_image", "second_face"]
+            for root in candidates:
+                if not root.exists() or not root.is_dir():
+                    continue
+                for zombie_name in zombie_names:
+                    for ext in exts:
+                        zombie_file = root / f"{zombie_name}{ext}"
+                        if zombie_file.exists() and zombie_file.is_file():
+                            # Пропускаем old_face, если он попался
+                            if zombie_file.name.lower().startswith("old_face"):
+                                continue
+                            return zombie_file
         
-        # Если не нашли по имени, ищем любой подходящий файл изображения
-        for root in candidates:
-            if not root.exists():
-                continue
-            if root.is_file() and root.suffix.lower() in exts:
-                return root
-            if root.is_dir():
-                for file in sorted(root.iterdir()):
-                    if file.is_file() and file.suffix.lower() in exts:
-                        # Пропускаем old_face.jpg, так как это первое лицо
-                        if file.name.lower() in ("old_face.jpg", "old_face.png", "old_face.jpeg"):
-                            continue
-                        return file
         return None
 
-    def get_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:
-        """Return cached reference image tensor and landmarks for texture transfer."""
-        ref_path = self._find_reference_image_path()
+    def _load_reference_image(self, image_type: str = "zombie") -> Optional[Tuple[torch.Tensor, np.ndarray]]:
+        """Загружает и кэширует reference image для texture transfer."""
+        cache_attr = f"_reference_image_cache_{image_type}"
+        path_attr = f"_reference_image_path_{image_type}"
+        mtime_attr = f"_reference_image_mtime_{image_type}"
+        
+        ref_path = self._find_reference_image_path(image_type)
         if ref_path is None:
-            self._reference_image_cache = None
-            self._reference_image_path = None
+            setattr(self, cache_attr, None)
+            setattr(self, path_attr, None)
             return None
 
         mtime = ref_path.stat().st_mtime
-        if (
-            self._reference_image_cache is not None
-            and self._reference_image_path == ref_path
-            and self._reference_image_mtime == mtime
-        ):
-            return self._reference_image_cache
+        cached = getattr(self, cache_attr, None)
+        cached_path = getattr(self, path_attr, None)
+        cached_mtime = getattr(self, mtime_attr, None)
+        
+        if cached is not None and cached_path == ref_path and cached_mtime == mtime:
+            return cached
 
         try:
             from app.processors.utils import texture_transfer
@@ -358,36 +369,165 @@ class ModelsProcessor(QtCore.QObject):
 
         tensor = texture_transfer.load_reference_image(ref_path, self.device)
         if tensor is None:
-            self._reference_image_cache = None
-            self._reference_image_path = None
+            setattr(self, cache_attr, None)
+            setattr(self, path_attr, None)
             return None
 
         try:
-            _, kps_5, _ = self.run_detect(
-                tensor,
-                detect_mode='RetinaFace',
-                max_num=1,
-                score=0.5,
-                input_size=(512, 512),
-                use_landmark_detection=True,
-                landmark_detect_mode='5',
-                landmark_score=0.5,
-            )
+            # Для zombie_texture особенно важно найти landmarks
+            # Пробуем несколько режимов обнаружения для надежности
+            kps_5 = None
+            detection_modes = ['RetinaFace', 'YOLOv5-Face', 'YOLOv8-Face']
+            
+            for detect_mode in detection_modes:
+                try:
+                    _, kps_5, _ = self.run_detect(
+                        tensor,
+                        detect_mode=detect_mode,
+                        max_num=1,
+                        score=0.3,  # Более низкий порог для лучшего обнаружения
+                        input_size=(512, 512),
+                        use_landmark_detection=True,
+                        landmark_detect_mode='5',
+                        landmark_score=0.3,  # Более низкий порог для landmarks
+                    )
+                    if kps_5 is not None and len(kps_5) > 0:
+                        break
+                except Exception:
+                    continue
+            
             if kps_5 is None or len(kps_5) == 0:
-                print("Reference image: no face detected")
-                self._reference_image_cache = None
-                self._reference_image_path = None
-                return None
+                # Для zombie_texture и aging критично наличие landmarks, возвращаем None
+                if image_type in ("zombie", "aging"):
+                    setattr(self, cache_attr, None)
+                    setattr(self, path_attr, None)
+                    return None
+                # Для других типов можно продолжить без landmarks
+                cache_value = (tensor, None)
+                setattr(self, cache_attr, cache_value)
+                setattr(self, path_attr, ref_path)
+                setattr(self, mtime_attr, mtime)
+                return cache_value
+            
+            # Успешно найдены landmarks
             ref_kps = np.array(kps_5[0])
-            self._reference_image_cache = (tensor, ref_kps)
-            self._reference_image_path = ref_path
-            self._reference_image_mtime = mtime
-            return self._reference_image_cache
+            if ref_kps.shape != (5, 2):
+                ref_kps = ref_kps.reshape(5, 2) if ref_kps.size == 10 else None
+                if ref_kps is None:
+                    setattr(self, cache_attr, None)
+                    setattr(self, path_attr, None)
+                    return None
+            
+            cache_value = (tensor, ref_kps)
+            setattr(self, cache_attr, cache_value)
+            setattr(self, path_attr, ref_path)
+            setattr(self, mtime_attr, mtime)
+            return cache_value
         except Exception as exc:  # pragma: no cover
-            print(f"Failed to process reference image: {exc}")
-            self._reference_image_cache = None
-            self._reference_image_path = None
+            print(f"Failed to process {image_type} reference image: {exc}")
+            setattr(self, cache_attr, None)
+            setattr(self, path_attr, None)
             return None
+
+    def get_aging_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:
+        """Возвращает reference image для эффекта старения (old_face)."""
+        return self._load_reference_image("aging")
+
+    def get_aging_embedding(self, arcface_model: str) -> Optional[np.ndarray]:
+        """Возвращает embedding из old_face изображения для face swap."""
+        aging_ref_data = self.get_aging_reference_image()
+        if aging_ref_data is None:
+            print(f"[get_aging_embedding] No aging reference image data")
+            return None
+        
+        try:
+            aging_ref_img = aging_ref_data[0]
+            aging_ref_kps = aging_ref_data[1] if len(aging_ref_data) > 1 else None
+            
+            if aging_ref_kps is None:
+                print(f"[get_aging_embedding] No landmarks in reference data, detecting...")
+                # Пытаемся обнаружить landmarks
+                _, detected_kps, _ = self.run_detect(
+                    aging_ref_img,
+                    detect_mode='RetinaFace',
+                    max_num=1,
+                    score=0.3,
+                    input_size=(512, 512),
+                    use_landmark_detection=True,
+                    landmark_detect_mode='5',
+                    landmark_score=0.3,
+                )
+                if detected_kps is not None and len(detected_kps) > 0:
+                    aging_ref_kps = np.array(detected_kps[0])
+                    print(f"[get_aging_embedding] Landmarks detected: {len(aging_ref_kps)} points")
+                else:
+                    print(f"[get_aging_embedding] Failed to detect landmarks")
+                    return None
+            
+            # Получаем embedding из old_face
+            embedding, _ = self.run_recognize_direct(
+                aging_ref_img,
+                aging_ref_kps,
+                similarity_type='Opal',
+                arcface_model=arcface_model
+            )
+            if embedding is not None:
+                print(f"[get_aging_embedding] Embedding loaded successfully: shape={embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
+            else:
+                print(f"[get_aging_embedding] Failed to get embedding from reference image")
+            return embedding
+        except Exception as exc:
+            print(f"[get_aging_embedding] Failed to get aging embedding: {exc}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def get_zombie_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:
+        """Возвращает reference image для эффекта зомби (zombie_texture)."""
+        return self._load_reference_image("zombie")
+
+    def get_zombie_embedding(self, arcface_model: str) -> Optional[np.ndarray]:
+        """Возвращает embedding из zombie_texture изображения для face swap."""
+        zombie_ref_data = self.get_zombie_reference_image()
+        if zombie_ref_data is None:
+            return None
+        
+        try:
+            zombie_ref_img = zombie_ref_data[0]
+            zombie_ref_kps = zombie_ref_data[1] if len(zombie_ref_data) > 1 else None
+            
+            if zombie_ref_kps is None:
+                # Пытаемся обнаружить landmarks
+                _, detected_kps, _ = self.run_detect(
+                    zombie_ref_img,
+                    detect_mode='RetinaFace',
+                    max_num=1,
+                    score=0.3,
+                    input_size=(512, 512),
+                    use_landmark_detection=True,
+                    landmark_detect_mode='5',
+                    landmark_score=0.3,
+                )
+                if detected_kps is not None and len(detected_kps) > 0:
+                    zombie_ref_kps = np.array(detected_kps[0])
+                else:
+                    return None
+            
+            # Получаем embedding из zombie_texture
+            embedding, _ = self.run_recognize_direct(
+                zombie_ref_img,
+                zombie_ref_kps,
+                similarity_type='Opal',
+                arcface_model=arcface_model
+            )
+            return embedding
+        except Exception as exc:
+            print(f"Failed to get zombie embedding: {exc}")
+            return None
+
+    def get_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:
+        """Обратная совместимость: возвращает zombie reference image."""
+        return self.get_zombie_reference_image()
 
 
     def load_inswapper_iss_emap(self, model_name):

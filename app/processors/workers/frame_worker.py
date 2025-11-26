@@ -182,6 +182,19 @@ class FrameWorker(threading.Thread):
                     for _, target_face in self.main_window.target_faces.items():
                         parameters = ParametersDict(self.parameters[target_face.face_id], self.main_window.default_parameters) #Use the parameters of the target face
 
+                        # Логируем каждые 30 кадров для проверки условия
+                        if not hasattr(self, '_process_frame_log_counter'):
+                            self._process_frame_log_counter = 0
+                        self._process_frame_log_counter += 1
+                        should_log_process = self._process_frame_log_counter % 30 == 0
+                        
+                        swapfaces_checked = self.main_window.swapfacesButton.isChecked()
+                        editfaces_checked = self.main_window.editFacesButton.isChecked()
+                        current_stage = getattr(self.main_window, "_current_stage", 0)
+                        
+                        if should_log_process:
+                            print(f"[FrameWorker.process_frame] swapfacesButton.isChecked()={swapfaces_checked}, editFacesButton.isChecked()={editfaces_checked}, current_stage={current_stage}, condition={swapfaces_checked or editfaces_checked}")
+
                         if self.main_window.swapfacesButton.isChecked() or self.main_window.editFacesButton.isChecked():
                             sim = self.models_processor.findCosineDistance(fface['embedding'], target_face.get_embedding(control['RecognitionModelSelection'])) # Recognition for comparing
                             if sim>=parameters['SimilarityThresholdSlider']:
@@ -200,7 +213,9 @@ class FrameWorker(threading.Thread):
 
                                 # swap_core function is executed even if 'Swap Faces' button is disabled,
                                 # because it also returns the original face and face mask 
-                                img, fface['original_face'], fface['swap_mask'] = self.swap_core(img, fface['kps_5'], s_e=s_e, t_e=target_face.get_embedding(arcface_model), parameters=parameters, control=control, dfm_model=dfm_model)
+                                if should_log_process:
+                                    print(f"[FrameWorker.process_frame] Calling swap_core: sim={sim:.3f}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}, current_stage={current_stage}")
+                                img, fface['original_face'], fface['swap_mask'] = self.swap_core(img, fface['kps_5'], s_e=s_e, t_e=target_face.get_embedding(arcface_model), parameters=parameters, control=control, dfm_model=dfm_model, kps_all=fface.get('kps_all', None))
                                         # cv2.imwrite('temp_swap_face.png', swapped_face.permute(1,2,0).cpu().numpy())
                                 if self.main_window.editFacesButton.isChecked():
                                     img = self.swap_edit_face_core(img, fface['kps_all'], parameters, control)
@@ -211,10 +226,11 @@ class FrameWorker(threading.Thread):
         if control['ShowAllDetectedFacesBBoxToggle']:
             img = self.draw_bounding_boxes_on_detected_faces(img, det_faces_data, control)
 
-        if control["ShowLandmarksEnableToggle"] and det_faces_data:
-            img = img.permute(1,2,0)
-            img = self.paint_face_landmarks(img, det_faces_data, control)
-            img = img.permute(2,0,1)
+        # Отключена визуализация landmarks
+        # if control["ShowLandmarksEnableToggle"] and det_faces_data:
+        #     img = img.permute(1,2,0)
+        #     img = self.paint_face_landmarks(img, det_faces_data, control)
+        #     img = img.permute(2,0,1)
 
         if compare_mode:
             img = self.get_compare_faces_image(img, det_faces_data, control)
@@ -254,34 +270,133 @@ class FrameWorker(threading.Thread):
         return kps_5
     
     def paint_face_landmarks(self, img: torch.Tensor, det_faces_data: list, control: dict) -> torch.Tensor:
-        # if img_y <= 720:
-        #     p = 1
-        # else:
-        #     p = 2
-        p = 2 #Point thickness
+        """
+        Рисует landmarks на изображении с улучшенной визуализацией.
+        Теперь отображает точки для всех обнаруженных лиц, не только для распознанных.
+        Изображение приходит в формате (H, W, C) после permute.
+        Рисуем напрямую на tensor, не используя OpenCV для конвертации всего изображения.
+        """
+        # Изображение уже в формате (H, W, C) после permute(1,2,0)
+        # Работаем напрямую с tensor, рисуя только точки
+        
+        # Цвета для разных точек (RGB формат)
+        colors_5 = [
+            (0, 255, 0),    # Левый глаз - зеленый
+            (0, 0, 255),   # Правый глаз - синий
+            (255, 0, 0),   # Нос - красный
+            (255, 255, 0), # Левый уголок рта - голубой
+            (0, 255, 255), # Правый уголок рта - желтый
+        ]
+        
+        labels_5 = ['LE', 'RE', 'NO', 'LM', 'RM']  # Left Eye, Right Eye, Nose, Left Mouth, Right Mouth
+        
+        # Получаем размеры изображения
+        h, w = img.shape[:2]
+        
+        # Рисуем landmarks для всех обнаруженных лиц
         for i, fface in enumerate(det_faces_data):
+            # Используем kps_all если доступен (все точки включая контур лица), иначе kps_5
+            keypoints_all = fface.get('kps_all', None)
+            keypoints_5 = fface.get('kps_5', None)
+            
+            # Приоритет: kps_all > kps_5
+            if keypoints_all is not None and len(keypoints_all) > 0:
+                keypoints = keypoints_all
+                use_all_points = True
+            elif keypoints_5 is not None and len(keypoints_5) > 0:
+                keypoints = keypoints_5
+                use_all_points = False
+            else:
+                continue
+            
+            # Конвертируем keypoints в numpy array если нужно
+            if not isinstance(keypoints, np.ndarray):
+                keypoints = np.array(keypoints)
+            
+            # Проверяем, распознано ли лицо (для изменения цвета)
+            is_recognized = False
+            recognized_color = (255, 0, 0)  # Красный для распознанных (RGB)
             for _, target_face in self.main_window.target_faces.items():
-                parameters = self.parameters[target_face.face_id] #Use the parameters of the target face
-                sim = self.models_processor.findCosineDistance(fface['embedding'], target_face.get_embedding(control['RecognitionModelSelection']))
-                if sim>=parameters['SimilarityThresholdSlider']:
-                    if parameters['LandmarksPositionAdjEnableToggle']:
-                        kcolor = tuple((255, 0, 0))
-                        keypoints = fface['kps_5']
+                parameters = self.parameters[target_face.face_id]
+                sim = self.models_processor.findCosineDistance(
+                    fface['embedding'], 
+                    target_face.get_embedding(control['RecognitionModelSelection'])
+                )
+                if sim >= parameters['SimilarityThresholdSlider']:
+                    is_recognized = True
+                    if parameters.get('LandmarksPositionAdjEnableToggle', False):
+                        recognized_color = (0, 0, 255)  # Синий для скорректированных (RGB)
+                    break
+            
+            # Определяем цвета для разных типов точек
+            num_points = len(keypoints)
+            
+            # Рисуем все точки landmarks
+            for idx in range(num_points):
+                kpoint = keypoints[idx]
+                # Координаты: x, y
+                x, y = int(kpoint[0]), int(kpoint[1])
+                
+                # Проверяем, что координаты в пределах изображения
+                if x < 0 or x >= w or y < 0 or y >= h:
+                    continue
+                
+                # Выбираем цвет в зависимости от типа точки и распознавания
+                if is_recognized:
+                    color = recognized_color
+                elif use_all_points and num_points >= 68:
+                    # Для 68 точек: контур лица (0-16), брови (17-26), глаза (27-35, 36-47), нос (27-35), рот (48-67)
+                    if idx < 17:
+                        # Контур лица - зеленый
+                        color = (0, 255, 0)
+                    elif idx < 27:
+                        # Брови - голубой
+                        color = (255, 255, 0)
+                    elif idx < 36:
+                        # Левый глаз - синий
+                        color = (0, 0, 255)
+                    elif idx < 48:
+                        # Правый глаз - фиолетовый
+                        color = (255, 0, 255)
+                    elif idx < 68:
+                        # Нос и рот - желтый
+                        color = (0, 255, 255)
                     else:
-                        kcolor = tuple((0, 255, 255))
-                        keypoints = fface['kps_all']
-
-                    for kpoint in keypoints:
-                        for i in range(-1, p):
-                            for j in range(-1, p):
-                                try:
-                                    img[int(kpoint[1])+i][int(kpoint[0])+j][0] = kcolor[0]
-                                    img[int(kpoint[1])+i][int(kpoint[0])+j][1] = kcolor[1]
-                                    img[int(kpoint[1])+i][int(kpoint[0])+j][2] = kcolor[2]
-
-                                except ValueError:
-                                    #print("Key-points value {} exceed the image size {}.".format(kpoint, (img_x, img_y)))
-                                    continue
+                        # Остальные точки - белый
+                        color = (255, 255, 255)
+                elif use_all_points and num_points == 5:
+                    # Для 5 точек используем специальные цвета
+                    color = colors_5[idx] if idx < len(colors_5) else (255, 255, 255)
+                else:
+                    # Для других моделей - чередуем цвета
+                    color_idx = idx % len(colors_5)
+                    color = colors_5[color_idx]
+                
+                # Рисуем круг с белой обводкой
+                # Для контура лица делаем точки меньше, для ключевых точек - больше
+                if use_all_points and num_points >= 68 and idx < 17:
+                    radius = 3  # Меньше для контура лица
+                else:
+                    radius = 5  # Больше для ключевых точек
+                
+                for dy in range(-radius, radius + 1):
+                    for dx in range(-radius, radius + 1):
+                        px, py = x + dx, y + dy
+                        if px < 0 or px >= w or py < 0 or py >= h:
+                            continue
+                        dist_sq = dx * dx + dy * dy
+                        if dist_sq <= radius * radius:
+                            # Белая обводка (внешний круг)
+                            if dist_sq > (radius - 1) * (radius - 1):
+                                img[py, px, 0] = 255
+                                img[py, px, 1] = 255
+                                img[py, px, 2] = 255
+                            else:
+                                # Цветной круг
+                                img[py, px, 0] = color[0]
+                                img[py, px, 1] = color[1]
+                                img[py, px, 2] = color[2]
+        
         return img
     
     def draw_bounding_boxes_on_detected_faces(self, img: torch.Tensor, det_faces_data: list, control: dict):
@@ -400,9 +515,13 @@ class FrameWorker(threading.Thread):
             self.models_processor.load_inswapper_iss_emap('Inswapper128')
             latent = torch.from_numpy(self.models_processor.calc_inswapper_latent(s_e)).float().to(self.models_processor.device)
             if parameters['FaceLikenessEnableToggle']:
-                factor = parameters['FaceLikenessFactorDecimalSlider']
-                dst_latent = torch.from_numpy(self.models_processor.calc_inswapper_latent(t_e)).float().to(self.models_processor.device)
-                latent = latent - (factor * dst_latent)
+                # Проверяем, что t_e не None и не пустой
+                if t_e is not None and len(t_e) > 0:
+                    factor = parameters['FaceLikenessFactorDecimalSlider']
+                    dst_latent = torch.from_numpy(self.models_processor.calc_inswapper_latent(t_e)).float().to(self.models_processor.device)
+                    latent = latent - (factor * dst_latent)
+                else:
+                    print(f"[get_affined_face_dim_and_swapping_latents] FaceLikeness enabled but t_e is None or empty, skipping")
 
             dim = 1
             if parameters['SwapperResSelection'] == '128':
@@ -593,7 +712,21 @@ class FrameWorker(threading.Thread):
         border_mask = gauss(border_mask)
         return border_mask
             
-    def swap_core(self, img, kps_5, kps=False, s_e=None, t_e=None, parameters=None, control=None, dfm_model=False): # img = RGB
+    def swap_core(self, img, kps_5, kps=False, s_e=None, t_e=None, parameters=None, control=None, dfm_model=False, kps_all=None): # img = RGB
+        # Логируем каждые 30 кадров для проверки вызова функции
+        if not hasattr(self, '_swap_core_log_counter'):
+            self._swap_core_log_counter = 0
+        self._swap_core_log_counter += 1
+        should_log_swap_core = self._swap_core_log_counter % 30 == 0
+        
+        # Всегда логируем состояние при вызове, если есть current_stage > 0
+        if hasattr(self.main_window, "_current_stage"):
+            current_stage = getattr(self.main_window, "_current_stage", 0)
+            swapfaces_checked = getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()
+            # Логируем всегда, если current_stage > 0 (для отладки эффекта старения)
+            if current_stage > 0 or should_log_swap_core:
+                print(f"[FrameWorker.swap_core] Called: current_stage={current_stage}, swapfacesButton.isChecked()={swapfaces_checked}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}, counter={self._swap_core_log_counter}")
+        
         s_e = s_e if isinstance(s_e, np.ndarray) else []
         t_e = t_e if isinstance(t_e, np.ndarray) else []
         parameters = parameters or {}
@@ -607,7 +740,22 @@ class FrameWorker(threading.Thread):
         original_face_512, original_face_384, original_face_256, original_face_128 = self.get_transformed_and_scaled_faces(tform, img)
         original_faces = (original_face_512, original_face_384, original_face_256, original_face_128)
         dim=1
-        if (s_e is not None and len(s_e) > 0) or (swapper_model == 'DeepFaceLive (DFM)' and dfm_model):
+        
+        # ВАЖНО: Проверяем, активен ли эффект старения. Если да, НЕ выполняем обычный face swap,
+        # так как эффект старения будет применён позже через face swap с old_face
+        current_stage_swap = getattr(self.main_window, "_current_stage", 0)
+        should_skip_normal_swap = current_stage_swap > 0
+        
+        if should_skip_normal_swap:
+            # Если эффект старения активен, используем оригинальное лицо для swap
+            # (эффект старения будет применён позже через face swap с old_face)
+            swap = original_face_512
+            if parameters['StrengthEnableToggle']:
+                itex = ceil(parameters['StrengthAmountSlider'] / 100.)
+                prev_face = torch.div(swap, 255.)
+                prev_face = prev_face.permute(1, 2, 0)
+            print(f"[FrameWorker] Skipping normal face swap (aging effect active), current_stage={current_stage_swap}")
+        elif (s_e is not None and len(s_e) > 0) or (swapper_model == 'DeepFaceLive (DFM)' and dfm_model):
 
             input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(original_faces, swapper_model, dfm_model, s_e, t_e, parameters)
 
@@ -656,10 +804,26 @@ class FrameWorker(threading.Thread):
         # (они должны применяться к оригинальному лицу, а не к уже свапнутому)
         original_face_for_effects = original_face_512.clone()
         
-        # Конвертируем swap в float для обработки
-        texture_canvas = swap.clone()
-        if texture_canvas.dtype == torch.uint8:
-            texture_canvas = texture_canvas.float()
+        # Проверяем, активен ли эффект старения
+        current_stage = getattr(self.main_window, "_current_stage", 0)
+        swapfaces_checked = getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()
+        
+        # ВАЖНО: Если эффект старения активен, используем оригинальное лицо для texture_canvas,
+        # а не уже свапнутое лицо. Это нужно, чтобы эффект старения применялся к оригинальному лицу пользователя.
+        if current_stage > 0:
+            # Используем оригинальное лицо для эффекта старения
+            texture_canvas = original_face_512.clone()
+            if texture_canvas.dtype == torch.uint8:
+                texture_canvas = texture_canvas.float()
+            print(f"[FrameWorker] Using original_face_512 for texture_canvas (aging effect active), current_stage={current_stage}, swapfacesButton.isChecked()={swapfaces_checked}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}")
+        else:
+            # Используем swap для обычной обработки
+            texture_canvas = swap.clone()
+            if texture_canvas.dtype == torch.uint8:
+                texture_canvas = texture_canvas.float()
+            # Логируем, если swapfacesButton включен, но current_stage = 0 (возможная проблема)
+            if swapfaces_checked:
+                print(f"[FrameWorker] WARNING: swapfacesButton is checked but current_stage={current_stage}, using swap instead of original_face_512")
         
         target_size = int(texture_canvas.shape[-1])
         from app.processors.utils import texture_transfer, faceutil
@@ -667,27 +831,60 @@ class FrameWorker(threading.Thread):
         # ========== ЭФФЕКТ СТАРЕНИЯ (old_face) ==========
         # Используем параметры animation_stages и face swap вместо texture transfer
         aging_intensity = 0.0
+        # Получаем интенсивность эффекта старения всегда, когда этап активен
+        aging_intensity = 0.0
         if hasattr(self.main_window, "get_aging_factors"):
             aging_intensity, _ = self.main_window.get_aging_factors()
         
-        # Применяем face swap для эффекта старения, если есть сила эффекта
-        if aging_intensity > 0:
-            # Debug output
-            if hasattr(self.main_window, "_current_stage"):
-                print(f"[Aging Effect] Stage: {self.main_window._current_stage}, intensity: {aging_intensity:.3f}")
+        # Применяем face swap для эффекта старения, если этап активен (даже если intensity = 0.0 для плавного проявления)
+        
+        # Логируем каждые 30 кадров для отладки (определяем ДО условия, чтобы логи были всегда)
+        if not hasattr(self, '_aging_swap_log_counter'):
+            self._aging_swap_log_counter = 0
+        self._aging_swap_log_counter += 1
+        should_log = self._aging_swap_log_counter % 30 == 0
+        
+        # Всегда логируем, если current_stage > 0, чтобы видеть, что происходит
+        if current_stage > 0:
+            print(f"[FrameWorker] Aging check: current_stage={current_stage}, intensity={aging_intensity:.3f}, hasattr(_current_stage)={hasattr(self.main_window, '_current_stage')}, swapfacesButton.isChecked()={getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()}, counter={self._aging_swap_log_counter}")
+        
+        if hasattr(self.main_window, "_current_stage") and current_stage > 0:
+            # Логируем всегда при current_stage > 0 для отладки
+            print(f"[FrameWorker] Applying aging effect: stage={current_stage}, intensity={aging_intensity:.3f}, swapfacesButton.isChecked()={getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()}")
+            
             try:
                 # Получаем embedding из old_face для face swap
                 swapper_model = parameters.get('SwapModelSelection', 'Inswapper128')
                 arcface_model = self.models_processor.get_arcface_model(swapper_model)
-                print(f"[Aging Effect] Getting embedding with swapper_model={swapper_model}, arcface_model={arcface_model}")
                 aging_embedding = self.models_processor.get_aging_embedding(arcface_model)
                 
+                # Логируем всегда при current_stage > 0
+                print(f"[FrameWorker] Aging embedding: {'loaded' if aging_embedding is not None and len(aging_embedding) > 0 else 'NOT loaded'}")
+                
                 if aging_embedding is not None and len(aging_embedding) > 0:
-                    print(f"[Aging Effect] Embedding found, shape={aging_embedding.shape}")
                     # Применяем face swap с old_face напрямую
                     # Используем оригинальное лицо original_face_512 (не свапнутое!)
                     aging_s_e = aging_embedding
-                    aging_t_e = None  # Не используем target embedding для старения
+                    
+                    # Получаем embedding текущего лица пользователя для t_e (нужен для FaceLikeness)
+                    aging_t_e = None
+                    if parameters.get('FaceLikenessEnableToggle', False):
+                        try:
+                            # Для вырезанного лица 512x512 используем arcface_template, так как лицо уже выровнено
+                            from app.processors.utils import faceutil
+                            template_kps = faceutil.get_arcface_template(image_size=512, mode='arcface128')
+                            template_kps = np.squeeze(template_kps)  # (5, 2)
+                            # Получаем embedding текущего лица пользователя
+                            user_embedding, _ = self.models_processor.run_recognize_direct(
+                                original_face_512,
+                                template_kps,
+                                similarity_type='Opal',
+                                arcface_model=arcface_model
+                            )
+                            if user_embedding is not None and len(user_embedding) > 0:
+                                aging_t_e = user_embedding
+                        except Exception:
+                            aging_t_e = None
                     
                     # Выполняем face swap используя оригинальное лицо пользователя
                     input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(
@@ -718,93 +915,41 @@ class FrameWorker(threading.Thread):
                         output, input_face_affined_swap, original_face_for_effects, latent, itex, dim, swapper_model, False, parameters
                     )
                     
-                    # Усиливаем морщины после face swap - более агрессивное усиление
-                    if aging_intensity > 0:
-                        from torchvision.transforms.functional import gaussian_blur
-                        aging_swap_float = aging_swap.float()
-                        
-                        # gaussian_blur ожидает формат [batch, channels, height, width]
-                        # aging_swap_float имеет формат [channels, height, width]
-                        aging_swap_batch = aging_swap_float.unsqueeze(0)  # [1, 3, 512, 512]
-                        
-                        # Многоуровневое усиление морщин для более сильного проявления
-                        # Уровень 1: Мелкие детали (тонкие морщины)
-                        blurred_fine = gaussian_blur(
-                            aging_swap_batch,
-                            kernel_size=[3, 3],
-                            sigma=[0.5, 0.5]
-                        ).squeeze(0)  # [3, 512, 512]
-                        high_pass_fine = aging_swap_float - blurred_fine
-                        
-                        # Уровень 2: Средние детали (глубокие морщины)
-                        blurred_medium = gaussian_blur(
-                            aging_swap_batch,
-                            kernel_size=[7, 7],
-                            sigma=[1.5, 1.5]
-                        ).squeeze(0)  # [3, 512, 512]
-                        high_pass_medium = aging_swap_float - blurred_medium
-                        
-                        # Уровень 3: Крупные детали (складки)
-                        blurred_coarse = gaussian_blur(
-                            aging_swap_batch,
-                            kernel_size=[11, 11],
-                            sigma=[2.5, 2.5]
-                        ).squeeze(0)  # [3, 512, 512]
-                        high_pass_coarse = aging_swap_float - blurred_coarse
-                        
-                        # Комбинируем все уровни с разными весами
-                        # Мелкие детали - максимальное усиление
-                        fine_boost = 2.0 + aging_intensity * 3.0  # До 5x
-                        # Средние детали - сильное усиление
-                        medium_boost = 1.5 + aging_intensity * 2.5  # До 4x
-                        # Крупные детали - умеренное усиление
-                        coarse_boost = 1.0 + aging_intensity * 2.0  # До 3x
-                        
-                        # Применяем усиление с учетом силы эффекта
-                        enhanced_aging_face = aging_swap_float
-                        enhanced_aging_face += high_pass_fine * fine_boost * aging_intensity
-                        enhanced_aging_face += high_pass_medium * medium_boost * aging_intensity * 0.8
-                        enhanced_aging_face += high_pass_coarse * coarse_boost * aging_intensity * 0.6
-                        
-                        # Дополнительное контрастное усиление зон с морщинами
-                        # Вычисляем маску зон с высокой детализацией (морщины)
-                        detail_mask = torch.abs(high_pass_fine) + torch.abs(high_pass_medium) * 0.5
-                        detail_mask = detail_mask.mean(dim=0, keepdim=True)  # Усредняем по каналам
-                        detail_mask = (detail_mask - detail_mask.min()) / (detail_mask.max() - detail_mask.min() + 1e-6)
-                        detail_mask = detail_mask.expand_as(aging_swap_float)  # Расширяем до 3 каналов
-                        
-                        # Усиливаем контраст в зонах с морщинами
-                        contrast_boost = 1.0 + aging_intensity * 1.5  # До 2.5x контраста
-                        enhanced_aging_face = enhanced_aging_face * (1.0 - detail_mask * 0.3) + \
-                                             enhanced_aging_face * detail_mask * contrast_boost
-                        
-                        # Финальное ограничение значений
-                        enhanced_aging_face = torch.clamp(enhanced_aging_face, 0, 255)
-                        aging_swap = enhanced_aging_face.to(aging_swap.dtype)
-                    
                     # Смешиваем результат face swap с оригиналом в зависимости от силы эффекта
+                    # Плавное проявление от start_intensity до end_intensity
+                    # Применяем эффект даже при intensity = 0.0 для плавного проявления
                     blend_strength = aging_intensity
-                    print(f"[Aging Effect] Blend strength: {blend_strength:.3f}, texture_canvas shape: {texture_canvas.shape}, aging_swap shape: {aging_swap.shape}")
+                    
+                    # Логируем всегда при current_stage > 0
+                    print(f"[FrameWorker] Aging swap applied: blend_strength={blend_strength:.3f}, intensity={aging_intensity:.3f}")
+                    
                     if blend_strength < 1.0:
+                        # Плавное смешивание: blend_strength = 0.0 -> только оригинал, blend_strength = 1.0 -> только aging_swap
+                        texture_canvas_before = texture_canvas.clone()
                         texture_canvas = texture_canvas * (1.0 - blend_strength) + aging_swap.float() * blend_strength
+                        # Логируем всегда при current_stage > 0
+                        print(f"[FrameWorker] Aging blend applied: blend_strength={blend_strength:.3f}, texture_canvas changed: {not torch.equal(texture_canvas_before, texture_canvas)}")
                     else:
+                        # Полная замена при максимальной интенсивности
+                        texture_canvas_before = texture_canvas.clone()
                         texture_canvas = aging_swap.float()
-                    print(f"[Aging Effect] After blending, texture_canvas min: {texture_canvas.min():.2f}, max: {texture_canvas.max():.2f}")
+                        # Логируем всегда при current_stage > 0
+                        print(f"[FrameWorker] Aging full replace: texture_canvas changed: {not torch.equal(texture_canvas_before, texture_canvas)}")
                 else:
-                    print(f"[Aging Effect] Embedding not found or empty. aging_embedding={aging_embedding}")
-                    # Проверяем, загружено ли изображение old_face
-                    aging_ref_data = self.models_processor.get_aging_reference_image()
-                    if aging_ref_data is None:
-                        print("[Aging Effect] Reference image (old_face) not found!")
-                    else:
-                        print(f"[Aging Effect] Reference image found, but embedding generation failed")
+                    # Embedding не найден - эффект старения не может быть применен
+                    # Логируем всегда при current_stage > 0
+                    print(f"[FrameWorker] Aging embedding is None or empty, skipping aging effect")
             except Exception as exc:
-                print(f"Aging face swap effect failed: {exc}")
+                # Ошибка при применении эффекта старения - продолжаем без эффекта
+                print(f"[FrameWorker] Error applying aging effect: {exc}")
                 import traceback
                 traceback.print_exc()
+        elif should_log:
+            print(f"[FrameWorker] Aging effect skipped: current_stage={current_stage} (must be > 0)")
         
         # ========== ЭФФЕКТ ЗОМБИ (zombie_texture) ==========
-        # Используем параметры zombie_overlay и face swap вместо texture transfer
+        # Используем параметры zombie_overlay и overlay наложение (texture/color transfer) как в replication_guide.md
+        # Натягиваем текстуру на лицо пользователя используя landmarks с видеопотока (kps_all для более точного натягивания)
         zombie_texture = parameters.get("TextureStrengthSlider", 0)
         zombie_color = parameters.get("ColorStrengthSlider", 0)
         overlay_color_factor = overlay_texture_factor = 0.0
@@ -814,105 +959,62 @@ class FrameWorker(threading.Thread):
         zombie_color_strength = (zombie_color / 100.0) * overlay_color_factor
         zombie_texture_strength = (zombie_texture / 100.0) * overlay_texture_factor
 
-        # Применяем face swap для эффекта зомби, если есть сила эффекта
-        if zombie_texture_strength > 0 or zombie_color_strength > 0:
-            # Debug output
-            if hasattr(self.main_window, "_current_stage"):
-                print(f"[Zombie Effect] Stage: {self.main_window._current_stage}, texture_strength: {zombie_texture_strength:.3f}, color_strength: {zombie_color_strength:.3f}, base_texture: {zombie_texture}, base_color: {zombie_color}, overlay_texture: {overlay_texture_factor:.3f}, overlay_color: {overlay_color_factor:.3f}")
+        # Применяем overlay наложение для эффекта зомби, если этап активен
+        # Применяем даже при intensity = 0.0 для плавного проявления
+        if hasattr(self.main_window, "_current_stage") and self.main_window._current_stage > 0:
             try:
-                # Получаем embedding из zombie_texture для face swap
-                swapper_model = parameters.get('SwapModelSelection', 'Inswapper128')
-                arcface_model = self.models_processor.get_arcface_model(swapper_model)
-                zombie_embedding = self.models_processor.get_zombie_embedding(arcface_model)
+                # Получаем reference image для zombie_texture
+                zombie_ref_data = self.models_processor.get_zombie_reference_image()
                 
-                if zombie_embedding is not None and len(zombie_embedding) > 0:
-                    # Применяем face swap с zombie_texture напрямую
-                    # Используем уже извлеченное лицо original_face_512
-                    zombie_s_e = zombie_embedding
-                    zombie_t_e = None  # Не используем target embedding для зомби
+                if zombie_ref_data is not None:
+                    zombie_ref_img = zombie_ref_data[0]
+                    zombie_ref_kps = zombie_ref_data[1] if len(zombie_ref_data) > 1 else None
                     
-                    # Выполняем face swap используя те же методы, что и в swap_core
-                    input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(
-                        original_faces, swapper_model, False, zombie_s_e, zombie_t_e, parameters
-                    )
-                    
-                    # Optional Scaling
-                    if parameters.get('FaceAdjEnableToggle', False):
-                        input_face_affined = v2.functional.affine(
-                            input_face_affined, 0, (0, 0), 
-                            1 + parameters.get('FaceScaleAmountSlider', 0) / 100, 0, 
-                            center=(dim*128/2, dim*128/2), 
-                            interpolation=v2.InterpolationMode.BILINEAR
-                        )
-                    
-                    itex = 1
-                    if parameters.get('StrengthEnableToggle', False):
-                        itex = ceil(parameters.get('StrengthAmountSlider', 100) / 100.)
-                    
-                    # Create empty output image and preprocess it for swapping
-                    output_size = int(128 * dim)
-                    output = torch.zeros((output_size, output_size, 3), dtype=torch.float32, device=self.models_processor.device)
-                    input_face_affined_swap = input_face_affined.permute(1, 2, 0)
-                    input_face_affined_swap = torch.div(input_face_affined_swap, 255.0)
-                    
-                    # Используем оригинальное лицо для face swap с зомби
-                    zombie_swap, _ = self.get_swapped_and_prev_face(
-                        output, input_face_affined_swap, original_face_for_effects, latent, itex, dim, swapper_model, False, parameters
-                    )
-                    
-                    # Применяем occlusion mask если включен
-                    if parameters.get("OccluderEnableToggle", False):
-                        occluder_mask = self.models_processor.apply_occlusion(original_face_256, parameters.get("OccluderSizeSlider", 0))
-                        t_mask = v2.Resize((target_size, target_size), interpolation=v2.InterpolationMode.BILINEAR, antialias=False)
-                        occluder_mask = t_mask(occluder_mask)
-                        blur_amount = parameters.get('OccluderXSegBlurSlider', 0)
-                        if blur_amount > 0:
-                            from torchvision.transforms.functional import gaussian_blur
-                            kernel_size = blur_amount * 2 + 1
-                            sigma = (blur_amount + 1) * 0.2
-                            occluder_mask = gaussian_blur(occluder_mask.unsqueeze(0), kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma]).squeeze(0)
-                        # Применяем маску к zombie_swap
-                        # occluder_mask имеет формат [1, 1, H, W] или [1, H, W], zombie_swap имеет формат [C, H, W] = [3, 512, 512]
-                        # Нужно привести маску к формату [1, H, W] и расширить до [3, H, W]
-                        if occluder_mask.dim() == 4:
-                            occluder_mask = occluder_mask.squeeze(0)  # [1, H, W] или [H, W]
-                        if occluder_mask.dim() == 2:
-                            occluder_mask = occluder_mask.unsqueeze(0)  # [1, H, W]
-                        # Расширяем до [3, H, W]
-                        occluder_mask_3d = occluder_mask.expand_as(zombie_swap)  # [3, H, W]
-                        zombie_swap = zombie_swap * occluder_mask_3d
-                    
-                    # Смешиваем результат face swap с текущим canvas в зависимости от силы эффекта
-                    blend_strength = max(zombie_texture_strength, zombie_color_strength)
-                    if blend_strength < 1.0:
-                        texture_canvas = texture_canvas * (1.0 - blend_strength) + zombie_swap.float() * blend_strength
-                    else:
-                        texture_canvas = zombie_swap.float()
-                    
-                    # Применяем цветовую коррекцию, если нужно
-                    if zombie_color_strength > 0:
-                        from app.processors.utils import texture_transfer
-                        zombie_ref_data = self.models_processor.get_zombie_reference_image()
-                        if zombie_ref_data is not None:
-                            zombie_ref_img = zombie_ref_data[0]
-                            zombie_ref_kps = zombie_ref_data[1] if len(zombie_ref_data) > 1 else None
+                    if zombie_ref_kps is not None:
+                        from app.processors.utils import texture_transfer, faceutil
+                        
+                        # Проверяем, что landmarks на reference image распознаны корректно
+                        if zombie_ref_kps.shape != (5, 2):
+                            zombie_ref_kps = zombie_ref_kps.reshape(5, 2) if zombie_ref_kps.size == 10 else None
+                        
+                        if zombie_ref_kps is not None:
+                            # Используем стандартный arcface template для натягивания текстуры
+                            target_kps = faceutil.get_arcface_template(image_size=target_size, mode='arcface128')
+                            target_kps = np.squeeze(target_kps)  # (5, 2)
                             
-                            if zombie_ref_kps is not None:
-                                zombie_aligned = texture_transfer.align_reference_to_target(
-                                    zombie_ref_img, zombie_ref_kps, target_size=target_size
+                            # Выравниваем reference image к геометрии выровненного лица пользователя
+                            aligned_ref_img = texture_transfer.align_reference_to_target(
+                                zombie_ref_img, zombie_ref_kps, target_size=target_size, target_kps=target_kps
+                            )
+                            
+                            # Конвертируем в float если нужно
+                            if aligned_ref_img.dtype == torch.uint8:
+                                aligned_ref_img = aligned_ref_img.float()
+                            if texture_canvas.dtype == torch.uint8:
+                                texture_canvas_float = texture_canvas.float()
+                            else:
+                                texture_canvas_float = texture_canvas
+                            
+                            # Apply Color Transfer (overlay наложение)
+                            if zombie_color_strength > 0:
+                                texture_canvas_float = texture_transfer.transfer_color_reinhard(
+                                    aligned_ref_img, texture_canvas_float, strength=zombie_color_strength
                                 )
-                                if zombie_aligned.dtype == torch.uint8:
-                                    zombie_aligned = zombie_aligned.float()
-                                
-                                texture_canvas = texture_transfer.transfer_color_reinhard(
-                                    zombie_aligned, texture_canvas, strength=zombie_color_strength
+                            
+                            # Apply Texture Transfer (overlay наложение)
+                            if zombie_texture_strength > 0:
+                                texture_canvas_float = texture_transfer.transfer_texture_highpass(
+                                    aligned_ref_img, texture_canvas_float, strength=zombie_texture_strength
                                 )
+                            
+                            # Обновляем texture_canvas
+                            texture_canvas = texture_canvas_float
                 else:
-                    print("Zombie embedding not found, skipping zombie effect")
+                    # Reference image не найден - эффект зомби не может быть применен
+                    pass
             except Exception as exc:
-                print(f"Zombie face swap effect failed: {exc}")
-                import traceback
-                traceback.print_exc()
+                # Ошибка при применении эффекта зомби - продолжаем без эффекта
+                pass
         
         # Конвертируем обратно в исходный тип swap
         if swap.dtype == torch.uint8:
@@ -920,7 +1022,23 @@ class FrameWorker(threading.Thread):
         else:
             texture_canvas = torch.clamp(texture_canvas, 0, 255)
         
-        swap = texture_canvas
+        # Присваиваем texture_canvas обратно в swap
+        # ВАЖНО: Если эффект старения активен, texture_canvas содержит результат эффекта старения,
+        # который должен заменить обычный face swap
+        current_stage_final = getattr(self.main_window, "_current_stage", 0)
+        if current_stage_final > 0:
+            swap_before = swap.clone()
+            swap_mean_before = torch.mean(swap_before.float())
+            texture_canvas_mean = torch.mean(texture_canvas.float())
+            # Заменяем swap результатом эффекта старения
+            swap = texture_canvas.clone()  # Используем clone() для безопасности
+            swap_mean_after = torch.mean(swap.float())
+            swap_changed = not torch.equal(swap_before, swap)
+            # Логируем всегда при current_stage > 0 для отладки
+            print(f"[FrameWorker] Final swap assignment: swap changed={swap_changed}, current_stage={current_stage_final}, swap_mean_before={swap_mean_before:.2f}, texture_canvas_mean={texture_canvas_mean:.2f}, swap_mean_after={swap_mean_after:.2f}")
+        else:
+            # Если эффект старения не активен, используем texture_canvas (который содержит результат обычного face swap или зомби эффекта)
+            swap = texture_canvas
 
         border_mask = self.get_border_mask(parameters)
 
@@ -930,15 +1048,33 @@ class FrameWorker(threading.Thread):
         
         # Expression Restorer
         if parameters['FaceExpressionEnableToggle']:
+            current_stage_restorer = getattr(self.main_window, "_current_stage", 0)
+            if current_stage_restorer > 0:
+                swap_before_restorer = swap.clone()
             swap = self.apply_face_expression_restorer(original_face_512, swap, parameters)
+            if current_stage_restorer > 0:
+                restorer_changed = not torch.equal(swap_before_restorer, swap)
+                print(f"[FrameWorker] Expression Restorer applied: changed={restorer_changed}, current_stage={current_stage_restorer}")
 
         # Restorer
         if parameters["FaceRestorerEnableToggle"]:
+            current_stage_restorer = getattr(self.main_window, "_current_stage", 0)
+            if current_stage_restorer > 0:
+                swap_before_restorer = swap.clone()
             swap = self.models_processor.apply_facerestorer(swap, parameters['FaceRestorerDetTypeSelection'], parameters['FaceRestorerTypeSelection'], parameters["FaceRestorerBlendSlider"], parameters['FaceFidelityWeightDecimalSlider'], control['DetectorScoreSlider'])
+            if current_stage_restorer > 0:
+                restorer_changed = not torch.equal(swap_before_restorer, swap)
+                print(f"[FrameWorker] Face Restorer applied: changed={restorer_changed}, current_stage={current_stage_restorer}")
 
         # Restorer2
         if parameters["FaceRestorerEnable2Toggle"]:
+            current_stage_restorer2 = getattr(self.main_window, "_current_stage", 0)
+            if current_stage_restorer2 > 0:
+                swap_before_restorer2 = swap.clone()
             swap = self.models_processor.apply_facerestorer(swap, parameters['FaceRestorerDetType2Selection'], parameters['FaceRestorerType2Selection'], parameters["FaceRestorerBlend2Slider"], parameters['FaceFidelityWeight2DecimalSlider'], control['DetectorScoreSlider'])
+            if current_stage_restorer2 > 0:
+                restorer2_changed = not torch.equal(swap_before_restorer2, swap)
+                print(f"[FrameWorker] Face Restorer2 applied: changed={restorer2_changed}, current_stage={current_stage_restorer2}")
 
         # Occluder
         if parameters["OccluderEnableToggle"]:
@@ -991,13 +1127,22 @@ class FrameWorker(threading.Thread):
             swap_mask = torch.mul(swap_mask, img_swap_mask)
 
         # Face Diffing
+        # ВАЖНО: Если эффект старения активен, НЕ применяем Face Diffing, так как он смешивает swap с original_face_512,
+        # что может перезаписать эффект старения
+        current_stage_diffing = getattr(self.main_window, "_current_stage", 0)
         if parameters["DifferencingEnableToggle"]:
-            mask = self.models_processor.apply_fake_diff(swap, original_face_512, parameters["DifferencingAmountSlider"])
-            gauss = transforms.GaussianBlur(parameters['DifferencingBlendAmountSlider']*2+1, (parameters['DifferencingBlendAmountSlider']+1)*0.2)
-            mask = gauss(mask.type(torch.float32))
-            swap = swap * mask + original_face_512*(1-mask)
+            if current_stage_diffing > 0:
+                print(f"[FrameWorker] Face Diffing DISABLED (aging effect active), current_stage={current_stage_diffing}")
+            else:
+                mask = self.models_processor.apply_fake_diff(swap, original_face_512, parameters["DifferencingAmountSlider"])
+                gauss = transforms.GaussianBlur(parameters['DifferencingBlendAmountSlider']*2+1, (parameters['DifferencingBlendAmountSlider']+1)*0.2)
+                mask = gauss(mask.type(torch.float32))
+                swap = swap * mask + original_face_512*(1-mask)
 
-        if parameters["AutoColorEnableToggle"]:
+        # AutoColor - применяем только если эффект старения не активен
+        # (AutoColor может перезаписать результат эффекта старения)
+        current_stage_autocolor = getattr(self.main_window, "_current_stage", 0)
+        if parameters["AutoColorEnableToggle"] and current_stage_autocolor == 0:
             # Histogram color matching original face on swapped face
             if parameters['AutoColorTransferTypeSelection'] == 'Test':
                 swap = faceutil.histogram_matching(original_face_512, swap, parameters["AutoColorBlendAmountSlider"])
@@ -1010,6 +1155,8 @@ class FrameWorker(threading.Thread):
 
             elif parameters['AutoColorTransferTypeSelection'] == 'DFL_Orig':
                 swap = faceutil.histogram_matching_DFL_Orig(original_face_512, swap, t512(swap_mask), parameters["AutoColorBlendAmountSlider"])
+        elif parameters["AutoColorEnableToggle"] and current_stage_autocolor > 0:
+            print(f"[FrameWorker] AutoColor DISABLED (aging effect active), current_stage={current_stage_autocolor}")
 
         # Apply color corrections
         if parameters['ColorEnableToggle']:
@@ -1057,7 +1204,20 @@ class FrameWorker(threading.Thread):
         swap_mask = torch.mul(swap_mask, border_mask)
         swap_mask = t512(swap_mask)
         
+        # Логируем перед применением mask, если эффект старения активен
+        current_stage_mask = getattr(self.main_window, "_current_stage", 0)
+        if current_stage_mask > 0:
+            swap_before_mask = swap.clone()
+            swap_mean_before = torch.mean(swap_before_mask.float())
+            mask_mean = torch.mean(swap_mask.float())
+            print(f"[FrameWorker] Before mask: swap_mean={swap_mean_before:.2f}, mask_mean={mask_mean:.2f}, current_stage={current_stage_mask}")
+        
         swap = torch.mul(swap, swap_mask)
+        
+        if current_stage_mask > 0:
+            swap_mean_after = torch.mean(swap.float())
+            mask_changed = not torch.equal(swap_before_mask, swap)
+            print(f"[FrameWorker] After mask: swap_mean={swap_mean_after:.2f}, changed={mask_changed}, current_stage={current_stage_mask}")
 
         # For face comparing
         original_face_512_clone = None
@@ -1116,6 +1276,14 @@ class FrameWorker(threading.Thread):
         swap = torch.add(swap, img_crop)
         swap = swap.type(torch.uint8)
         swap = swap.permute(2,0,1)
+        
+        # Логируем перед вставкой swap обратно в img, если эффект старения активен
+        current_stage_paste = getattr(self.main_window, "_current_stage", 0)
+        if current_stage_paste > 0:
+            swap_mean = torch.mean(swap.float())
+            img_crop_mean = torch.mean(img_crop.float())
+            print(f"[FrameWorker] Pasting swap back to img: current_stage={current_stage_paste}, swap_mean={swap_mean:.2f}, img_crop_mean={img_crop_mean:.2f}, region=({top}:{bottom}, {left}:{right})")
+        
         img[0:3, top:bottom, left:right] = swap
 
 

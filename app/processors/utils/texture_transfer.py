@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -51,62 +50,21 @@ def warp_triangle(img, src_tri, dst_tri, size):
     return dst_cropped, mask, r2
 
 
-def align_reference_to_target_by_nose(ref_img: torch.Tensor, target_nose_kps: np.ndarray, target_size: int = 128) -> torch.Tensor:
+def align_reference_to_target(ref_img: torch.Tensor, ref_kps: np.ndarray, target_size: int = 128, target_kps: Optional[np.ndarray] = None) -> torch.Tensor:
     """
-    Aligns the reference image by anchoring its center to the target nose position.
-    No face detection required on reference image.
+    Align reference image to target face geometry.
     
     Args:
-        ref_img: Reference image tensor (C, H, W) in [0, 255]
-        target_nose_kps: Nose landmark from target face (shape: (1, 2))
-        target_size: Target size for output
+        ref_img: Reference image tensor (C, H, W).
+        ref_kps: Reference image landmarks (5, 2).
+        target_size: Target image size.
+        target_kps: Target landmarks (5, 2). If None, uses standard arcface template.
     """
-    # Конвертируем в numpy для обработки
-    if ref_img.dtype == torch.uint8:
-        img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy().astype(np.float32)
+    if target_kps is not None:
+        dst_kps = target_kps
     else:
-        img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy()
-        if img_np.max() > 1.0:
-            img_np = np.clip(img_np, 0, 255)
-        else:
-            img_np = img_np * 255.0
-    
-    ref_h, ref_w = img_np.shape[:2]
-    target_nose_x, target_nose_y = target_nose_kps[0]
-    
-    # Вычисляем масштаб для вписывания reference image в target_size
-    scale_factor = min(target_size / ref_w, target_size / ref_h)
-    
-    # Вычисляем смещение для центрирования на nose
-    scaled_ref_w = ref_w * scale_factor
-    scaled_ref_h = ref_h * scale_factor
-    tx = target_nose_x - scaled_ref_w / 2
-    ty = target_nose_y - scaled_ref_h / 2
-    
-    # Создаём матрицу аффинного преобразования
-    M = np.array([
-        [scale_factor, 0, tx],
-        [0, scale_factor, ty]
-    ], dtype=np.float32)
-    
-    # Применяем преобразование
-    warped_img_np = cv2.warpAffine(
-        img_np.astype(np.uint8) if img_np.dtype != np.uint8 else img_np,
-        M,
-        (target_size, target_size),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101
-    )
-    
-    # Конвертируем обратно в tensor
-    warped_tensor = torch.from_numpy(warped_img_np).permute(2, 0, 1).float().to(ref_img.device)
-    return warped_tensor
-
-
-def align_reference_to_target(ref_img: torch.Tensor, ref_kps: np.ndarray, target_size: int = 128) -> torch.Tensor:
-    """Align reference image to standard arcface template of given size."""
-    dst_kps = faceutil.get_arcface_template(image_size=target_size, mode='arcface128')
-    dst_kps = np.squeeze(dst_kps)
+        dst_kps = faceutil.get_arcface_template(image_size=target_size, mode='arcface128')
+        dst_kps = np.squeeze(dst_kps)
 
     img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy()
     if img_np.dtype != np.uint8:
@@ -218,8 +176,11 @@ def transfer_color_reinhard(source: torch.Tensor, target: torch.Tensor, strength
     return torch.clamp(blended, 0, 255)
 
 
-def transfer_texture_highpass(source: torch.Tensor, target: torch.Tensor, strength: float = 1.0, blur_radius: int = 5) -> torch.Tensor:
-    """Blend high-frequency texture from source onto target."""
+def transfer_texture_highpass(source: torch.Tensor, target: torch.Tensor, strength: float = 1.0, blur_radius: int = 3) -> torch.Tensor:
+    """
+    Blend high-frequency texture (wrinkles, details) from source onto target.
+    Uses smaller blur radius to better preserve fine details like wrinkles.
+    """
     if strength <= 0:
         return target
 
@@ -230,9 +191,30 @@ def transfer_texture_highpass(source: torch.Tensor, target: torch.Tensor, streng
     if src.shape[1:] != tgt.shape[1:]:
         src = F.resize(src, tgt.shape[-2:])
 
+    # Используем меньший blur_radius для более четкого выделения складок и деталей
+    # Уменьшен с 5 до 3 для лучшего сохранения мелких деталей
     kernel = blur_radius * 2 + 1
     src_blur = F.gaussian_blur(src, kernel_size=[kernel, kernel], sigma=[blur_radius, blur_radius])
+    
+    # Вычисляем high-pass фильтр (высокочастотные детали = складки)
     high_pass = src - src_blur
-    result = tgt + high_pass * strength
+    
+    # Усиливаем контраст складок для более выраженного эффекта
+    # Применяем усиление контраста к high-pass компоненту для более выраженных складок
+    # Усиливаем на 50% для более заметного эффекта старости
+    high_pass_enhanced = high_pass * 1.5
+    
+    # Дополнительно применяем небольшое усиление контраста для выделения складок
+    # Используем нормализацию для более равномерного эффекта
+    high_pass_magnitude = torch.abs(high_pass_enhanced)
+    high_pass_max = torch.max(high_pass_magnitude)
+    if high_pass_max > 0:
+        # Нормализуем и усиливаем
+        high_pass_normalized = high_pass_enhanced / (high_pass_max + 1e-6)
+        high_pass_enhanced = high_pass_normalized * high_pass_max * 1.3
+    
+    # Применяем с учетом strength
+    result = tgt + high_pass_enhanced * strength
+    
     return torch.clamp(result, 0, 255)
 
