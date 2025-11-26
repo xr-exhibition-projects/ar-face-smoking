@@ -437,7 +437,6 @@ class ModelsProcessor(QtCore.QObject):
         """Возвращает embedding из old_face изображения для face swap."""
         aging_ref_data = self.get_aging_reference_image()
         if aging_ref_data is None:
-            print(f"[get_aging_embedding] No aging reference image data")
             return None
         
         try:
@@ -445,7 +444,6 @@ class ModelsProcessor(QtCore.QObject):
             aging_ref_kps = aging_ref_data[1] if len(aging_ref_data) > 1 else None
             
             if aging_ref_kps is None:
-                print(f"[get_aging_embedding] No landmarks in reference data, detecting...")
                 # Пытаемся обнаружить landmarks
                 _, detected_kps, _ = self.run_detect(
                     aging_ref_img,
@@ -459,9 +457,7 @@ class ModelsProcessor(QtCore.QObject):
                 )
                 if detected_kps is not None and len(detected_kps) > 0:
                     aging_ref_kps = np.array(detected_kps[0])
-                    print(f"[get_aging_embedding] Landmarks detected: {len(aging_ref_kps)} points")
                 else:
-                    print(f"[get_aging_embedding] Failed to detect landmarks")
                     return None
             
             # Получаем embedding из old_face
@@ -471,15 +467,9 @@ class ModelsProcessor(QtCore.QObject):
                 similarity_type='Opal',
                 arcface_model=arcface_model
             )
-            if embedding is not None:
-                print(f"[get_aging_embedding] Embedding loaded successfully: shape={embedding.shape if hasattr(embedding, 'shape') else 'unknown'}")
-            else:
-                print(f"[get_aging_embedding] Failed to get embedding from reference image")
             return embedding
-        except Exception as exc:
-            print(f"[get_aging_embedding] Failed to get aging embedding: {exc}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            return None
             return None
 
     def get_zombie_reference_image(self) -> Optional[Tuple[torch.Tensor, np.ndarray]]:

@@ -93,7 +93,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.welcomeLabel: Optional[QtWidgets.QLabel] = None
         self.mediaToggleButton: Optional[QtWidgets.QPushButton] = None
         self._media_mode: str = "webcam"
-        self._prevent_video_pause = True
         super().__init__()
         self._webcam_backend_candidates = self._build_webcam_backend_candidates()
         self._webcam_button: Optional[widget_components.TargetMediaCardButton] = None
@@ -104,7 +103,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._fade_timer: Optional[QtCore.QTimer] = None
         self._fade_step: float = 0.0
         self._swap_active: bool = False
-        self._awaiting_second_click: bool = False
         self._second_press_triggered: bool = False
         self._button_icon_state: str = "start"
         self._current_button_pixmap: Optional[QtGui.QPixmap] = None
@@ -349,7 +347,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._overlay_opacity_effect = QtWidgets.QGraphicsOpacityEffect(self.welcomeAnimationLabel)
         self._overlay_opacity_effect.setOpacity(1.0)
         self.welcomeAnimationLabel.setGraphicsEffect(self._overlay_opacity_effect)
-        self._overlay_fade_animation: Optional[QtCore.QPropertyAnimation] = None
 
         self.configButton = QtWidgets.QPushButton("⚙", self)
         self.configButton.setFixedSize(42, 42)
@@ -576,7 +573,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         return progress
 
     def get_aging_factors(self) -> Tuple[float, float]:
-        """Возвращает множители для эффекта старения (old_face) исходя из текущего этапа анимации."""
+        """Возвращает множители для эффекта старения (old_face) исходя из текущего этапа анимации.
+        Использует fade-анимацию для плавного проявления."""
         if self._current_stage <= 0:
             return 0.0, 0.0
 
@@ -586,7 +584,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage_cfg = animation_stages.get(stage_key, {})
         
         if not stage_cfg:
-            print(f"[get_aging_factors] No config for {stage_key}, returning 0.0")
             return 0.0, 0.0
         
         start_intensity = float(stage_cfg.get("start_intensity", 0.0))
@@ -598,22 +595,11 @@ class ARSmokingWindow(main_ui.MainWindow):
         if end_intensity > 1.0:
             end_intensity = end_intensity / 100.0
         
-        # Вычисляем прогресс этапа (0.0 - 1.0) на основе прошедшего времени
-        # 0.0 = начало этапа, 1.0 = конец этапа
-        stage_progress = self._compute_stage_progress()
-        
-        # Плавно интерполируем между start_intensity и end_intensity
-        # stage_progress = 0.0 -> current_intensity = start_intensity
-        # stage_progress = 1.0 -> current_intensity = end_intensity
-        current_intensity = start_intensity + (end_intensity - start_intensity) * stage_progress
+        # Используем fade-анимацию для плавного проявления
+        # _fade_progress обновляется через _update_fade_progress() в fade-таймере
+        # Интерполируем между start_intensity и end_intensity на основе _fade_progress
+        current_intensity = start_intensity + (end_intensity - start_intensity) * self._fade_progress
         current_intensity = max(0.0, min(1.0, current_intensity))
-        
-        # Логируем каждые 30 кадров для отладки
-        if not hasattr(self, '_aging_log_counter'):
-            self._aging_log_counter = 0
-        self._aging_log_counter += 1
-        if self._aging_log_counter % 30 == 0:
-            print(f"[get_aging_factors] Stage: {self._current_stage}, progress: {stage_progress:.3f}, intensity: {current_intensity:.3f} (start: {start_intensity:.3f}, end: {end_intensity:.3f}), start_time: {self._stage_start_time}, duration: {self._stage_duration_ms}")
         
         return current_intensity, current_intensity
 
@@ -849,14 +835,11 @@ class ARSmokingWindow(main_ui.MainWindow):
     #  UI actions
     # ------------------------------------------------------------------ #
     def _on_uporotsya_toggled(self, checked: bool) -> None:
-        print(f"[_on_uporotsya_toggled] checked={checked}, selected_video_button={self.selected_video_button is not None}")
         if not self.selected_video_button:
             self.buttonUport.setChecked(False)
-            print(f"[_on_uporotsya_toggled] No video button selected, returning")
             return
 
         if checked:
-            print(f"[_on_uporotsya_toggled] Button checked, target_faces={len(self.target_faces) if self.target_faces else 0}")
             if not self.target_faces:
                 card_actions.find_target_faces(self)
                 if not self.target_faces:
@@ -866,50 +849,28 @@ class ARSmokingWindow(main_ui.MainWindow):
                         "Не удалось обнаружить лицо. Убедитесь, что камера направлена на лицо и попробуйте ещё раз.",
                     )
                     self.buttonUport.setChecked(False)
-                    print(f"[_on_uporotsya_toggled] No target faces found, returning")
                     return
-            # Начинаем первый этап анимации
-            # ВАЖНО: устанавливаем _current_stage и запускаем анимацию ДО включения swapfacesButton,
-            # чтобы таймер начал отсчет как можно раньше
-            print(f"[_on_uporotsya_toggled] Starting stage 1 animation, current_stage before: {self._current_stage}")
             
-            # ВАЖНО: Устанавливаем _current_stage = 1 ПЕРЕД вызовом _start_stage1_animation,
-            # чтобы при первом вызове swap_core current_stage уже был > 0
             self._current_stage = 1
-            print(f"[_on_uporotsya_toggled] Set _current_stage = {self._current_stage}")
-            
             self._start_stage1_animation()
             
-            # ВАЖНО: убеждаемся, что _stage_start_time и _stage_duration_ms установлены
-            # (они устанавливаются в _start_stage1_animation, но на всякий случай проверяем)
             if self._stage_start_time <= 0 or self._stage_duration_ms <= 0:
                 timings = self._animation_config.get("timings", {})
                 stage1_timings = timings.get("stage1", {})
                 duration_ms = stage1_timings.get("duration_ms", 4000)
                 self._stage_start_time = time.monotonic()
                 self._stage_duration_ms = duration_ms
-                print(f"[_on_uporotsya_toggled] Fixed stage timing: start_time={self._stage_start_time}, duration={self._stage_duration_ms}")
             
-            # ВАЖНО: Убеждаемся, что _current_stage все еще = 1 перед включением swapfacesButton
             if self._current_stage != 1:
-                print(f"[_on_uporotsya_toggled] WARNING: _current_stage changed to {self._current_stage}, resetting to 1")
                 self._current_stage = 1
             
-            # Включаем swapfacesButton после запуска анимации
-            print(f"[_on_uporotsya_toggled] Setting swapfacesButton checked=True, current_stage={self._current_stage}")
             self.swapfacesButton.setChecked(True)
-            # НЕ вызываем _stop_face_fade здесь, так как он может остановить таймер stage1
-            # self._stop_face_fade(reset_progress=True)
             self._swap_active = True
-            self._awaiting_second_click = True
             self._second_press_triggered = False
             self.buttonUport.setCheckable(False)
-            # Скрываем кнопку - она появится через таймер в _show_finish_button()
             self.buttonUport.hide()
             self.messageLabel.hide()
-            print(f"[_on_uporotsya_toggled] Stage 1 initialized: _current_stage={self._current_stage}, _stage_start_time={self._stage_start_time}, _stage_duration_ms={self._stage_duration_ms}, swapfacesButton.isChecked()={self.swapfacesButton.isChecked()}")
         else:
-            print(f"[_on_uporotsya_toggled] Button unchecked, stopping animation")
             self._update_uporotsya_button_icon(start=True)
             self.swapfacesButton.setChecked(False)
             self._stop_face_fade(reset_progress=True)
@@ -940,7 +901,6 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _reset_swap_state(self) -> None:
         self._swap_active = False
-        self._awaiting_second_click = False
         self._second_press_triggered = False
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.setEnabled(False)
@@ -1227,7 +1187,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             return True
         if obj == getattr(self, "deathOverlay", None) and event.type() == QtCore.QEvent.MouseButtonRelease:
             if self.deathOverlay.isVisible():
-                self._restart_from_death_screen()
+                # TODO: Implement restart logic
+                pass
             return True
         return super().eventFilter(obj, event)
 
@@ -1238,17 +1199,28 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage1_timings = timings.get("stage1", {})
         duration_ms = stage1_timings.get("duration_ms", 4000)
         
-        # Загружаем параметры интенсивности для логирования
+        # Загружаем параметры интенсивности
         animation_stages = self._animation_config.get("animation_stages", {})
         stage1_cfg = animation_stages.get("stage1", {})
-        start_intensity = stage1_cfg.get("start_intensity", 0.0)
-        end_intensity = stage1_cfg.get("end_intensity", 1.0)
+        start_intensity = float(stage1_cfg.get("start_intensity", 0.0))
+        end_intensity = float(stage1_cfg.get("end_intensity", 1.0))
+        
+        # Убеждаемся, что значения в диапазоне 0.0-1.0
+        if start_intensity > 1.0:
+            start_intensity = start_intensity / 100.0
+        if end_intensity > 1.0:
+            end_intensity = end_intensity / 100.0
         
         # Устанавливаем текущий этап
         self._current_stage = 1
         
+        # Инициализируем fade-прогресс с начальной интенсивностью
+        self._fade_progress = start_intensity
+        
+        # Запускаем fade-анимацию для плавного проявления эффекта старения
+        self._start_fade_timer(end_intensity, duration_ms)
+        
         # Запускаем таймер для показа кнопки "слезть"
-        # ВАЖНО: устанавливаем start_time ДО начала обработки кадров, чтобы прогресс вычислялся правильно
         self._stage_start_time = time.monotonic()
         self._stage_duration_ms = duration_ms
         
@@ -1263,7 +1235,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._stage1_timer.timeout.connect(self._show_finish_button)
         self._stage1_timer.start(duration_ms)
         
-        print(f"[_start_stage1_animation] Stage 1 started: duration={duration_ms}ms, start_time={self._stage_start_time}, current_stage={self._current_stage}, intensity: {start_intensity} -> {end_intensity}")
     
     def _start_stage2_animation(self) -> None:
         """Запускает второй этап анимации: от "СЛЕЗТЬ" до "НЕВОЗМОЖНО" """
@@ -1271,8 +1242,26 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage2_timings = timings.get("stage2", {})
         duration_ms = stage2_timings.get("duration_ms", 2000)
         
+        # Загружаем параметры интенсивности
+        animation_stages = self._animation_config.get("animation_stages", {})
+        stage2_cfg = animation_stages.get("stage2", {})
+        start_intensity = float(stage2_cfg.get("start_intensity", 1.0))
+        end_intensity = float(stage2_cfg.get("end_intensity", 1.0))
+        
+        # Убеждаемся, что значения в диапазоне 0.0-1.0
+        if start_intensity > 1.0:
+            start_intensity = start_intensity / 100.0
+        if end_intensity > 1.0:
+            end_intensity = end_intensity / 100.0
+        
         # Устанавливаем текущий этап
         self._current_stage = 2
+        
+        # Инициализируем fade-прогресс с начальной интенсивностью этапа 2
+        self._fade_progress = start_intensity
+        
+        # Запускаем fade-анимацию для плавного проявления эффекта старения
+        self._start_fade_timer(end_intensity, duration_ms)
         
         # Запускаем таймер для показа надписи "Невозможно" и перехода к stage3
         self._stage_start_time = time.monotonic()
@@ -1291,8 +1280,26 @@ class ARSmokingWindow(main_ui.MainWindow):
         stage3_timings = timings.get("stage3", {})
         duration_ms = stage3_timings.get("duration_ms", 5000)
         
+        # Загружаем параметры интенсивности
+        animation_stages = self._animation_config.get("animation_stages", {})
+        stage3_cfg = animation_stages.get("stage3", {})
+        start_intensity = float(stage3_cfg.get("start_intensity", 1.0))
+        end_intensity = float(stage3_cfg.get("end_intensity", 1.0))
+        
+        # Убеждаемся, что значения в диапазоне 0.0-1.0
+        if start_intensity > 1.0:
+            start_intensity = start_intensity / 100.0
+        if end_intensity > 1.0:
+            end_intensity = end_intensity / 100.0
+        
         # Устанавливаем текущий этап
         self._current_stage = 3
+        
+        # Инициализируем fade-прогресс с начальной интенсивностью этапа 3
+        self._fade_progress = start_intensity
+        
+        # Запускаем fade-анимацию для плавного проявления эффекта старения
+        self._start_fade_timer(end_intensity, duration_ms)
         
         # Запускаем таймер для показа экрана смерти
         self._stage_start_time = time.monotonic()
@@ -1305,42 +1312,34 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._stage3_timer.timeout.connect(self._on_stage3_complete)
         self._stage3_timer.start(duration_ms)
 
-    def _start_fade_timer(self, target_intensity: float, duration_ms: int, on_complete: Optional[Callable[[], None]] = None) -> None:
-        if self._fade_timer:
-            self._fade_timer.stop()
-            self._fade_timer.deleteLater()
-        self._fade_timer = QtCore.QTimer(self)
-        interval_ms = 50
-        total = float(max(1, duration_ms))
-        current_stage_key = f"stage{self._current_stage}"
-        stage_cfg = self._animation_stages.get(current_stage_key, {})
-        start_intensity = float(stage_cfg.get("start_intensity", self._fade_progress))
-        end_intensity = float(stage_cfg.get("end_intensity", target_intensity))
-        intensity_range = end_intensity - start_intensity
-        self._fade_step = (interval_ms / total) * intensity_range
-
-        def update_progress():
-            self._update_fade_progress(target_intensity, on_complete=on_complete)
-
-        self._fade_timer.timeout.connect(update_progress)
-        self._fade_timer.start(interval_ms)
-
-    def _start_death_delay_timer(self) -> None:
-        self._cancel_death_delay_timer()
-        delay = max(0, int(self._death_delay_ms))
-        self._death_delay_timer = QtCore.QTimer(self)
-        self._death_delay_timer.setSingleShot(True)
-        self._death_delay_timer.timeout.connect(self._show_death_screen)
-        self._death_delay_timer.start(delay)
-
     def _cancel_death_delay_timer(self) -> None:
         if self._death_delay_timer:
             self._death_delay_timer.stop()
             self._death_delay_timer.deleteLater()
             self._death_delay_timer = None
     
-    def _update_fade_progress(self, target_intensity: float, on_complete: Optional[Callable[[], None]] = None) -> None:
-        """Обновляет прогресс анимации до целевой интенсивности"""
+    def _start_fade_timer(self, target_intensity: float, duration_ms: int) -> None:
+        """Запускает fade-анимацию для плавного проявления эффекта старения."""
+        if self._fade_timer:
+            self._fade_timer.stop()
+            self._fade_timer.deleteLater()
+        
+        self._fade_timer = QtCore.QTimer(self)
+        interval_ms = 50  # Обновляем каждые 50ms для плавной анимации
+        total = float(max(1, duration_ms))
+        
+        # Вычисляем шаг для fade-анимации
+        intensity_range = target_intensity - self._fade_progress
+        self._fade_step = (interval_ms / total) * intensity_range
+
+        def update_progress():
+            self._update_fade_progress(target_intensity)
+
+        self._fade_timer.timeout.connect(update_progress)
+        self._fade_timer.start(interval_ms)
+    
+    def _update_fade_progress(self, target_intensity: float) -> None:
+        """Обновляет прогресс fade-анимации до целевой интенсивности."""
         if self._fade_step > 0:
             self._fade_progress = min(target_intensity, self._fade_progress + self._fade_step)
         elif self._fade_step < 0:
@@ -1358,8 +1357,6 @@ class ARSmokingWindow(main_ui.MainWindow):
                 self._fade_timer.stop()
                 self._fade_timer.deleteLater()
                 self._fade_timer = None
-            if on_complete:
-                on_complete()
     
     def _show_finish_button(self) -> None:
         """Показывает кнопку 'Слезть' после задержки в первом этапе"""
@@ -1439,25 +1436,11 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.messageLabel.hide()
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
-        # Сбрасываем состояние анимации при показе экрана смерти
         self._stop_face_fade(reset_progress=True)
-        # Останавливаем обработку видео, но НЕ освобождаем media_capture для веб-камеры
-        # чтобы при повторном запуске можно было продолжить использовать тот же источник
         try:
             self.video_processor.stop_processing()
         except Exception:
             pass
-        # НЕ освобождаем media_capture для веб-камеры, чтобы при повторном запуске можно было использовать тот же источник
-        # if self.video_processor.media_capture:
-        #     try:
-        #         self.video_processor.media_capture.release()
-        #     except Exception:
-        #         pass
-        #     self.video_processor.media_capture = None
-        # НЕ сбрасываем video_processor состояние, чтобы при повторном запуске можно было использовать тот же источник
-        # self.video_processor.media_path = False
-        # self.video_processor.file_type = None
-        # self.video_processor.current_frame = []
         self.swapfacesButton.setChecked(False)
         self._swap_active = False
         if self.control_window and self.control_window.isVisible():
@@ -1470,107 +1453,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.configButton.hide()
         if self.mediaToggleButton:
             self.mediaToggleButton.hide()
-        # Подготавливаем следующую сессию (сбрасывает состояние для повторного запуска)
-        self._prepare_next_session()
-
-    def _restart_from_death_screen(self) -> None:
-        """Перезапускает сессию после экрана смерти, сохраняя состояние для работы эффектов."""
-        print(f"[_restart_from_death_screen] Restarting from death screen")
-        self._stop_death_animation()
-        self.deathOverlay.hide()
-        self.buttonUport.hide()
-        self.configButton.hide()
-        if self.mediaToggleButton:
-            self.mediaToggleButton.hide()
-        
-        # ВАЖНО: НЕ сбрасываем состояние анимации здесь, так как оно уже было сброшено в _prepare_next_session()
-        # Просто показываем welcome overlay и готовим кнопку к новому запуску
-        if hasattr(self, "buttonUport") and self.buttonUport:
-            # Включаем кнопку для повторного использования
-            self.buttonUport.setEnabled(True)
-            self.buttonUport.setCheckable(True)
-            self.buttonUport.setChecked(False)
-            self._update_uporotsya_button_icon(start=True)
-            print(f"[_restart_from_death_screen] Button enabled: {self.buttonUport.isEnabled()}, checkable: {self.buttonUport.isCheckable()}")
-        
-        # Убеждаемся, что swapfacesButton выключен (будет включен при нажатии на "упороться")
-        self.swapfacesButton.setChecked(False)
-        self._swap_active = False
-        print(f"[_restart_from_death_screen] swapfacesButton checked: {self.swapfacesButton.isChecked()}, swap_active: {self._swap_active}")
-        
-        # Убеждаемся, что состояние анимации сброшено (для нового запуска)
-        self._current_stage = 0
-        self._stage_start_time = 0
-        self._stage_duration_ms = 0
-        print(f"[_restart_from_death_screen] Animation state reset: current_stage={self._current_stage}, start_time={self._stage_start_time}, duration={self._stage_duration_ms}")
-        
-        # Проверяем наличие необходимых данных для повторного запуска
-        print(f"[_restart_from_death_screen] selected_video_button: {self.selected_video_button is not None}, target_faces: {len(self.target_faces) if self.target_faces else 0}")
-        
-        # Показываем welcome overlay
-        self._show_welcome_overlay()
-        
-        # Если видео было остановлено, перезапускаем его (для веб-камеры)
-        if self.selected_video_button and hasattr(self.selected_video_button, 'is_webcam') and self.selected_video_button.is_webcam:
-            if not self.buttonMediaPlay.isChecked():
-                # Не запускаем автоматически, пользователь сам нажмет кнопку
-                pass
-
-    def _prepare_next_session(self) -> None:
-        """Подготавливает следующую сессию, сбрасывая состояние анимации, но сохраняя данные для повторного использования."""
-        # Сбрасываем состояние анимации
-        self._stop_face_fade(reset_progress=True)
-        
-        # Сбрасываем состояние кнопок
-        if hasattr(self, "buttonUport") and self.buttonUport:
-            # НЕ отключаем кнопку здесь - она будет включена в _restart_from_death_screen
-            # self.buttonUport.setEnabled(False)
-            self.buttonUport.setCheckable(True)
-            self.buttonUport.setChecked(False)
-            self._update_uporotsya_button_icon(start=True)
-        
-        # Сбрасываем состояние свапа
-        self._swap_active = False
-        self._awaiting_second_click = False
-        self._second_press_triggered = False
-        self.messageLabel.hide()
-        
-        # Сбрасываем флаги автоматического выбора
-        self._auto_target_selected = False
-        self._auto_face_selected = False
-        self._pending_input_button = None
-        self._input_ready = False
-        self._target_ready = False
-        
-        # НЕ сбрасываем selected_video_button, чтобы при повторном запуске можно было использовать тот же источник
-        # self.selected_video_button = False
-        
-        # НЕ очищаем target_videos и списки, чтобы при повторном запуске можно было использовать те же лица
-        # self.target_videos = {}
-        # self.targetVideosList.clear()
-        # self.inputFacesList.clear()
-        
-        # Очищаем сцену
-        if getattr(self, "scene", None):
-            self.scene.clear()
-        
-        # Скрываем окна
-        if self.control_window:
-            self.control_window.hide()
-        if self.mediaToggleButton:
-            self.mediaToggleButton.hide()
-        
-        # НЕ сбрасываем video_processor состояние, чтобы при повторном запуске можно было использовать тот же источник
-        # self.video_processor.current_frame = []
-        # self.video_processor.media_path = False
-        # self.video_processor.file_type = None
-        
-        # ВАЖНО: НЕ освобождаем media_capture, чтобы при повторном запуске можно было использовать тот же источник
-        # (это делается в _show_death_screen, но мы не делаем это здесь)
-        # Сбрасываем флаг загрузки лиц, чтобы разрешить повторную загрузку
-        self._faces_loading_in_progress = False
-        QtCore.QTimer.singleShot(100, self._request_webcam_listing)
-        QtCore.QTimer.singleShot(150, self._load_default_input_faces)
 
     def _update_uporotsya_button_icon(self, start: bool) -> None:
         pixmap = self._start_pixmap if start else self._finish_pixmap

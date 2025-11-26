@@ -192,9 +192,6 @@ class FrameWorker(threading.Thread):
                         editfaces_checked = self.main_window.editFacesButton.isChecked()
                         current_stage = getattr(self.main_window, "_current_stage", 0)
                         
-                        if should_log_process:
-                            print(f"[FrameWorker.process_frame] swapfacesButton.isChecked()={swapfaces_checked}, editFacesButton.isChecked()={editfaces_checked}, current_stage={current_stage}, condition={swapfaces_checked or editfaces_checked}")
-
                         if self.main_window.swapfacesButton.isChecked() or self.main_window.editFacesButton.isChecked():
                             sim = self.models_processor.findCosineDistance(fface['embedding'], target_face.get_embedding(control['RecognitionModelSelection'])) # Recognition for comparing
                             if sim>=parameters['SimilarityThresholdSlider']:
@@ -213,8 +210,6 @@ class FrameWorker(threading.Thread):
 
                                 # swap_core function is executed even if 'Swap Faces' button is disabled,
                                 # because it also returns the original face and face mask 
-                                if should_log_process:
-                                    print(f"[FrameWorker.process_frame] Calling swap_core: sim={sim:.3f}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}, current_stage={current_stage}")
                                 img, fface['original_face'], fface['swap_mask'] = self.swap_core(img, fface['kps_5'], s_e=s_e, t_e=target_face.get_embedding(arcface_model), parameters=parameters, control=control, dfm_model=dfm_model, kps_all=fface.get('kps_all', None))
                                         # cv2.imwrite('temp_swap_face.png', swapped_face.permute(1,2,0).cpu().numpy())
                                 if self.main_window.editFacesButton.isChecked():
@@ -713,20 +708,6 @@ class FrameWorker(threading.Thread):
         return border_mask
             
     def swap_core(self, img, kps_5, kps=False, s_e=None, t_e=None, parameters=None, control=None, dfm_model=False, kps_all=None): # img = RGB
-        # Логируем каждые 30 кадров для проверки вызова функции
-        if not hasattr(self, '_swap_core_log_counter'):
-            self._swap_core_log_counter = 0
-        self._swap_core_log_counter += 1
-        should_log_swap_core = self._swap_core_log_counter % 30 == 0
-        
-        # Всегда логируем состояние при вызове, если есть current_stage > 0
-        if hasattr(self.main_window, "_current_stage"):
-            current_stage = getattr(self.main_window, "_current_stage", 0)
-            swapfaces_checked = getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()
-            # Логируем всегда, если current_stage > 0 (для отладки эффекта старения)
-            if current_stage > 0 or should_log_swap_core:
-                print(f"[FrameWorker.swap_core] Called: current_stage={current_stage}, swapfacesButton.isChecked()={swapfaces_checked}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}, counter={self._swap_core_log_counter}")
-        
         s_e = s_e if isinstance(s_e, np.ndarray) else []
         t_e = t_e if isinstance(t_e, np.ndarray) else []
         parameters = parameters or {}
@@ -754,7 +735,6 @@ class FrameWorker(threading.Thread):
                 itex = ceil(parameters['StrengthAmountSlider'] / 100.)
                 prev_face = torch.div(swap, 255.)
                 prev_face = prev_face.permute(1, 2, 0)
-            print(f"[FrameWorker] Skipping normal face swap (aging effect active), current_stage={current_stage_swap}")
         elif (s_e is not None and len(s_e) > 0) or (swapper_model == 'DeepFaceLive (DFM)' and dfm_model):
 
             input_face_affined, dfm_model, dim, latent = self.get_affined_face_dim_and_swapping_latents(original_faces, swapper_model, dfm_model, s_e, t_e, parameters)
@@ -815,51 +795,24 @@ class FrameWorker(threading.Thread):
             texture_canvas = original_face_512.clone()
             if texture_canvas.dtype == torch.uint8:
                 texture_canvas = texture_canvas.float()
-            print(f"[FrameWorker] Using original_face_512 for texture_canvas (aging effect active), current_stage={current_stage}, swapfacesButton.isChecked()={swapfaces_checked}, s_e={'present' if s_e is not None and len(s_e) > 0 else 'None'}")
         else:
             # Используем swap для обычной обработки
             texture_canvas = swap.clone()
             if texture_canvas.dtype == torch.uint8:
                 texture_canvas = texture_canvas.float()
-            # Логируем, если swapfacesButton включен, но current_stage = 0 (возможная проблема)
-            if swapfaces_checked:
-                print(f"[FrameWorker] WARNING: swapfacesButton is checked but current_stage={current_stage}, using swap instead of original_face_512")
-        
         target_size = int(texture_canvas.shape[-1])
         from app.processors.utils import texture_transfer, faceutil
         
         # ========== ЭФФЕКТ СТАРЕНИЯ (old_face) ==========
-        # Используем параметры animation_stages и face swap вместо texture transfer
-        aging_intensity = 0.0
-        # Получаем интенсивность эффекта старения всегда, когда этап активен
         aging_intensity = 0.0
         if hasattr(self.main_window, "get_aging_factors"):
             aging_intensity, _ = self.main_window.get_aging_factors()
         
-        # Применяем face swap для эффекта старения, если этап активен (даже если intensity = 0.0 для плавного проявления)
-        
-        # Логируем каждые 30 кадров для отладки (определяем ДО условия, чтобы логи были всегда)
-        if not hasattr(self, '_aging_swap_log_counter'):
-            self._aging_swap_log_counter = 0
-        self._aging_swap_log_counter += 1
-        should_log = self._aging_swap_log_counter % 30 == 0
-        
-        # Всегда логируем, если current_stage > 0, чтобы видеть, что происходит
-        if current_stage > 0:
-            print(f"[FrameWorker] Aging check: current_stage={current_stage}, intensity={aging_intensity:.3f}, hasattr(_current_stage)={hasattr(self.main_window, '_current_stage')}, swapfacesButton.isChecked()={getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()}, counter={self._aging_swap_log_counter}")
-        
         if hasattr(self.main_window, "_current_stage") and current_stage > 0:
-            # Логируем всегда при current_stage > 0 для отладки
-            print(f"[FrameWorker] Applying aging effect: stage={current_stage}, intensity={aging_intensity:.3f}, swapfacesButton.isChecked()={getattr(self.main_window, 'swapfacesButton', None) and self.main_window.swapfacesButton.isChecked()}")
-            
             try:
-                # Получаем embedding из old_face для face swap
                 swapper_model = parameters.get('SwapModelSelection', 'Inswapper128')
                 arcface_model = self.models_processor.get_arcface_model(swapper_model)
                 aging_embedding = self.models_processor.get_aging_embedding(arcface_model)
-                
-                # Логируем всегда при current_stage > 0
-                print(f"[FrameWorker] Aging embedding: {'loaded' if aging_embedding is not None and len(aging_embedding) > 0 else 'NOT loaded'}")
                 
                 if aging_embedding is not None and len(aging_embedding) > 0:
                     # Применяем face swap с old_face напрямую
@@ -915,37 +868,14 @@ class FrameWorker(threading.Thread):
                         output, input_face_affined_swap, original_face_for_effects, latent, itex, dim, swapper_model, False, parameters
                     )
                     
-                    # Смешиваем результат face swap с оригиналом в зависимости от силы эффекта
-                    # Плавное проявление от start_intensity до end_intensity
-                    # Применяем эффект даже при intensity = 0.0 для плавного проявления
                     blend_strength = aging_intensity
                     
-                    # Логируем всегда при current_stage > 0
-                    print(f"[FrameWorker] Aging swap applied: blend_strength={blend_strength:.3f}, intensity={aging_intensity:.3f}")
-                    
                     if blend_strength < 1.0:
-                        # Плавное смешивание: blend_strength = 0.0 -> только оригинал, blend_strength = 1.0 -> только aging_swap
-                        texture_canvas_before = texture_canvas.clone()
                         texture_canvas = texture_canvas * (1.0 - blend_strength) + aging_swap.float() * blend_strength
-                        # Логируем всегда при current_stage > 0
-                        print(f"[FrameWorker] Aging blend applied: blend_strength={blend_strength:.3f}, texture_canvas changed: {not torch.equal(texture_canvas_before, texture_canvas)}")
                     else:
-                        # Полная замена при максимальной интенсивности
-                        texture_canvas_before = texture_canvas.clone()
                         texture_canvas = aging_swap.float()
-                        # Логируем всегда при current_stage > 0
-                        print(f"[FrameWorker] Aging full replace: texture_canvas changed: {not torch.equal(texture_canvas_before, texture_canvas)}")
-                else:
-                    # Embedding не найден - эффект старения не может быть применен
-                    # Логируем всегда при current_stage > 0
-                    print(f"[FrameWorker] Aging embedding is None or empty, skipping aging effect")
-            except Exception as exc:
-                # Ошибка при применении эффекта старения - продолжаем без эффекта
-                print(f"[FrameWorker] Error applying aging effect: {exc}")
-                import traceback
-                traceback.print_exc()
-        elif should_log:
-            print(f"[FrameWorker] Aging effect skipped: current_stage={current_stage} (must be > 0)")
+            except Exception:
+                pass
         
         # ========== ЭФФЕКТ ЗОМБИ (zombie_texture) ==========
         # Используем параметры zombie_overlay и overlay наложение (texture/color transfer) как в replication_guide.md
@@ -1027,15 +957,7 @@ class FrameWorker(threading.Thread):
         # который должен заменить обычный face swap
         current_stage_final = getattr(self.main_window, "_current_stage", 0)
         if current_stage_final > 0:
-            swap_before = swap.clone()
-            swap_mean_before = torch.mean(swap_before.float())
-            texture_canvas_mean = torch.mean(texture_canvas.float())
-            # Заменяем swap результатом эффекта старения
-            swap = texture_canvas.clone()  # Используем clone() для безопасности
-            swap_mean_after = torch.mean(swap.float())
-            swap_changed = not torch.equal(swap_before, swap)
-            # Логируем всегда при current_stage > 0 для отладки
-            print(f"[FrameWorker] Final swap assignment: swap changed={swap_changed}, current_stage={current_stage_final}, swap_mean_before={swap_mean_before:.2f}, texture_canvas_mean={texture_canvas_mean:.2f}, swap_mean_after={swap_mean_after:.2f}")
+            swap = texture_canvas.clone()
         else:
             # Если эффект старения не активен, используем texture_canvas (который содержит результат обычного face swap или зомби эффекта)
             swap = texture_canvas
@@ -1052,9 +974,6 @@ class FrameWorker(threading.Thread):
             if current_stage_restorer > 0:
                 swap_before_restorer = swap.clone()
             swap = self.apply_face_expression_restorer(original_face_512, swap, parameters)
-            if current_stage_restorer > 0:
-                restorer_changed = not torch.equal(swap_before_restorer, swap)
-                print(f"[FrameWorker] Expression Restorer applied: changed={restorer_changed}, current_stage={current_stage_restorer}")
 
         # Restorer
         if parameters["FaceRestorerEnableToggle"]:
@@ -1062,9 +981,6 @@ class FrameWorker(threading.Thread):
             if current_stage_restorer > 0:
                 swap_before_restorer = swap.clone()
             swap = self.models_processor.apply_facerestorer(swap, parameters['FaceRestorerDetTypeSelection'], parameters['FaceRestorerTypeSelection'], parameters["FaceRestorerBlendSlider"], parameters['FaceFidelityWeightDecimalSlider'], control['DetectorScoreSlider'])
-            if current_stage_restorer > 0:
-                restorer_changed = not torch.equal(swap_before_restorer, swap)
-                print(f"[FrameWorker] Face Restorer applied: changed={restorer_changed}, current_stage={current_stage_restorer}")
 
         # Restorer2
         if parameters["FaceRestorerEnable2Toggle"]:
@@ -1072,9 +988,6 @@ class FrameWorker(threading.Thread):
             if current_stage_restorer2 > 0:
                 swap_before_restorer2 = swap.clone()
             swap = self.models_processor.apply_facerestorer(swap, parameters['FaceRestorerDetType2Selection'], parameters['FaceRestorerType2Selection'], parameters["FaceRestorerBlend2Slider"], parameters['FaceFidelityWeight2DecimalSlider'], control['DetectorScoreSlider'])
-            if current_stage_restorer2 > 0:
-                restorer2_changed = not torch.equal(swap_before_restorer2, swap)
-                print(f"[FrameWorker] Face Restorer2 applied: changed={restorer2_changed}, current_stage={current_stage_restorer2}")
 
         # Occluder
         if parameters["OccluderEnableToggle"]:
@@ -1130,10 +1043,7 @@ class FrameWorker(threading.Thread):
         # ВАЖНО: Если эффект старения активен, НЕ применяем Face Diffing, так как он смешивает swap с original_face_512,
         # что может перезаписать эффект старения
         current_stage_diffing = getattr(self.main_window, "_current_stage", 0)
-        if parameters["DifferencingEnableToggle"]:
-            if current_stage_diffing > 0:
-                print(f"[FrameWorker] Face Diffing DISABLED (aging effect active), current_stage={current_stage_diffing}")
-            else:
+        if parameters["DifferencingEnableToggle"] and current_stage_diffing == 0:
                 mask = self.models_processor.apply_fake_diff(swap, original_face_512, parameters["DifferencingAmountSlider"])
                 gauss = transforms.GaussianBlur(parameters['DifferencingBlendAmountSlider']*2+1, (parameters['DifferencingBlendAmountSlider']+1)*0.2)
                 mask = gauss(mask.type(torch.float32))
@@ -1155,8 +1065,6 @@ class FrameWorker(threading.Thread):
 
             elif parameters['AutoColorTransferTypeSelection'] == 'DFL_Orig':
                 swap = faceutil.histogram_matching_DFL_Orig(original_face_512, swap, t512(swap_mask), parameters["AutoColorBlendAmountSlider"])
-        elif parameters["AutoColorEnableToggle"] and current_stage_autocolor > 0:
-            print(f"[FrameWorker] AutoColor DISABLED (aging effect active), current_stage={current_stage_autocolor}")
 
         # Apply color corrections
         if parameters['ColorEnableToggle']:
@@ -1204,20 +1112,7 @@ class FrameWorker(threading.Thread):
         swap_mask = torch.mul(swap_mask, border_mask)
         swap_mask = t512(swap_mask)
         
-        # Логируем перед применением mask, если эффект старения активен
-        current_stage_mask = getattr(self.main_window, "_current_stage", 0)
-        if current_stage_mask > 0:
-            swap_before_mask = swap.clone()
-            swap_mean_before = torch.mean(swap_before_mask.float())
-            mask_mean = torch.mean(swap_mask.float())
-            print(f"[FrameWorker] Before mask: swap_mean={swap_mean_before:.2f}, mask_mean={mask_mean:.2f}, current_stage={current_stage_mask}")
-        
         swap = torch.mul(swap, swap_mask)
-        
-        if current_stage_mask > 0:
-            swap_mean_after = torch.mean(swap.float())
-            mask_changed = not torch.equal(swap_before_mask, swap)
-            print(f"[FrameWorker] After mask: swap_mean={swap_mean_after:.2f}, changed={mask_changed}, current_stage={current_stage_mask}")
 
         # For face comparing
         original_face_512_clone = None
@@ -1276,13 +1171,6 @@ class FrameWorker(threading.Thread):
         swap = torch.add(swap, img_crop)
         swap = swap.type(torch.uint8)
         swap = swap.permute(2,0,1)
-        
-        # Логируем перед вставкой swap обратно в img, если эффект старения активен
-        current_stage_paste = getattr(self.main_window, "_current_stage", 0)
-        if current_stage_paste > 0:
-            swap_mean = torch.mean(swap.float())
-            img_crop_mean = torch.mean(img_crop.float())
-            print(f"[FrameWorker] Pasting swap back to img: current_stage={current_stage_paste}, swap_mean={swap_mean:.2f}, img_crop_mean={img_crop_mean:.2f}, region=({top}:{bottom}, {left}:{right})")
         
         img[0:3, top:bottom, left:right] = swap
 
