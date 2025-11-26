@@ -181,6 +181,9 @@ class ARSmokingWindow(main_ui.MainWindow):
                 (self.width() - self.welcomeAnimationLabel.width()) // 2,
                 (self.height() - self.welcomeAnimationLabel.height()) // 2,
             )
+        # Перемасштабируем изображение при изменении размера окна
+        from app.ui.widgets.actions import layout_actions
+        QtCore.QTimer.singleShot(0, lambda: layout_actions.fit_image_to_view_onchange(self))
         if was_processing and not self.video_processor.processing:
             if hasattr(self, "buttonMediaPlay"):
                 self.buttonMediaPlay.blockSignals(True)
@@ -1036,35 +1039,27 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
 
         frame_width, frame_height = getattr(self, "_display_frame_size", (width, height))
-        frame_width = max(1, min(frame_width, width))
+        frame_width = max(1, frame_width)
         frame_height = max(1, frame_height)
 
         aspect_ratio = frame_width / frame_height
+        if aspect_ratio <= 0:
+            aspect_ratio = width / height if height else 1.0
         display_width = min(width, int(height * aspect_ratio))
         display_width = max(1, display_width)
 
-        label_width = min(display_width - 60, width - 60) if display_width > 120 else display_width
-        label_width = max(180, label_width)
+        # Определяем размеры надписи
         if self.messageLabel.pixmap():
-            label_width = min(label_width, self.messageLabel.pixmap().width())
+            label_width = self.messageLabel.pixmap().width()
             label_height = self.messageLabel.pixmap().height()
         else:
+            label_width = self.messageLabel.sizeHint().width()
             label_height = self.messageLabel.sizeHint().height()
-        button_geom = None
-        if hasattr(self, "buttonUport") and self.buttonUport:
-            button_geom = self.buttonUport.geometry()
-            if not button_geom.isNull():
-                label_width = button_geom.width()
-                label_height = max(label_height, button_geom.height())
-
+        
+        # Используем ту же логику позиционирования, что и для кнопки
         pos_x = max(0, (width - label_width) // 2)
-        if button_geom and not button_geom.isNull():
-            pos_x = button_geom.x()
-            pos_y = button_geom.bottom() - label_height
-        else:
-            pos_y = height - label_height - 24
-
-        pos_y = max(0, min(height - label_height, pos_y))
+        pos_y = max(0, height - label_height - 24)
+        
         self.messageLabel.setGeometry(pos_x, pos_y, label_width, label_height)
         self.messageLabel.raise_()
 
@@ -1343,13 +1338,43 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonUport.setMinimumSize(min_width, 48)
 
     def _refresh_death_overlay_graphics(self) -> None:
-        available_width = self._compute_available_button_width()
-
+        if not self.deathOverlay or not self.deathLabel:
+            return
+        
+        self.deathOverlay.setGeometry(self.rect())
+        overlay_width = max(1, self.deathOverlay.width())
+        overlay_height = max(1, self.deathOverlay.height())
+        
+        # Используем ту же логику пропорций, что и для welcome экрана (9:16)
+        frame_height = overlay_height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > overlay_width:
+            frame_width = overlay_width
+            frame_height = int(frame_width * 16 / 9)
+        
+        offset_x = (self.deathOverlay.width() - frame_width) // 2
+        offset_y = (self.deathOverlay.height() - frame_height) // 2
+        
         frame = self._current_death_frame or self.death_pixmap
         if frame and not frame.isNull():
-            self._set_death_label_frame(frame, available_width)
+            pixmap = frame
+            scaled = pixmap.scaled(
+                frame_width,
+                frame_height,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self.deathLabel.setPixmap(scaled)
+            self.deathLabel.setFixedSize(scaled.size())
+            self.deathLabel.move(
+                offset_x + (frame_width - scaled.width()) // 2,
+                offset_y + (frame_height - scaled.height()) // 2,
+            )
+            self.deathLabel.setText("")
         else:
-            self.deathLabel.setFixedSize(self.deathLabel.sizeHint())
+            self.deathLabel.setPixmap(QtGui.QPixmap())
+            self.deathLabel.setFixedSize(frame_width, frame_height)
+            self.deathLabel.move(offset_x, offset_y)
             self.deathLabel.setText("СМЕРТЬ\nНЕИЗБЕЖНА")
 
     def _show_welcome_overlay(self) -> None:
@@ -1427,15 +1452,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.deathLabel.clear()
             self._current_death_frame = None
             return
-        scaled = self._scaled_button_pixmap(frame, available_width)
-        if scaled.isNull():
-            self.deathLabel.clear()
-            self._current_death_frame = None
-            return
-        self.deathLabel.setPixmap(scaled)
-        self.deathLabel.setFixedSize(scaled.size())
-        self.deathLabel.setText("")
+        # Сохраняем кадр и обновляем графику через _refresh_death_overlay_graphics
+        # чтобы использовать те же пропорции, что и welcome экран
         self._current_death_frame = frame
+        self._refresh_death_overlay_graphics()
 
     def _start_death_animation(self) -> None:
         if hasattr(self, "deathLabel") and self.deathLabel:
@@ -1677,6 +1697,13 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._display_frame_size = (width, height)
             return frame
 
+        # Для веб-камеры используем родное разрешение без обрезки
+        if hasattr(self, 'video_processor') and self.video_processor.file_type == 'webcam':
+            self._display_frame_size = (width, height)
+            QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+            return frame
+
+        # Для видео обрезаем до соотношения 9:16
         desired_ratio = 9.0 / 16.0
         current_ratio = width / height
 

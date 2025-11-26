@@ -218,8 +218,35 @@ class TargetMediaCardButton(CardButton):
             if media_capture.isOpened():
                 # Установка BUFFERSIZE обычно быстрая
                 media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                # Разрешение не устанавливаем - используем нативное разрешение камеры для ускорения инициализации
-                print(f"[Startup] Using camera's native resolution (not setting custom resolution)")
+                # Устанавливаем максимальное разрешение для лучшего качества
+                # Пробуем установить максимальные доступные разрешения в порядке убывания
+                resolutions = [
+                    (3840, 2160),  # 4K
+                    (2560, 1440),  # 2K
+                    (1920, 1080),  # Full HD
+                    (1280, 720),   # HD
+                ]
+                
+                actual_width = 0
+                actual_height = 0
+                for width, height in resolutions:
+                    media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    # Даём камере время на установку разрешения
+                    import time as time_module
+                    time_module.sleep(0.1)
+                    actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    # Если разрешение установилось близко к запрошенному, используем его
+                    if abs(actual_width - width) < 50 and abs(actual_height - height) < 50:
+                        print(f"[Startup] Webcam resolution set to: {actual_width}x{actual_height}")
+                        break
+                
+                if actual_width == 0 or actual_height == 0:
+                    # Если ничего не установилось, используем текущее разрешение камеры
+                    actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    print(f"[Startup] Webcam using native resolution: {actual_width}x{actual_height}")
             print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999

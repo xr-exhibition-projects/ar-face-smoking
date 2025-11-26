@@ -77,7 +77,19 @@ def fit_image_to_view(main_window: 'MainWindow', pixmap_item: QtWidgets.QGraphic
 
         graphicsViewFrame.resetTransform()
         graphicsViewFrame.setSceneRect(scene_rect)
-        graphicsViewFrame.fitInView(pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-        graphicsViewFrame.centerOn(pixmap_item)
+        
+        # Если ширина окна меньше высоты (вертикальная ориентация),
+        # используем KeepAspectRatioByExpanding чтобы изображение заняло всю высоту
+        viewport_width = viewport_rect.width()
+        viewport_height = viewport_rect.height()
+        
+        if viewport_width < viewport_height:
+            # Вертикальная ориентация - используем KeepAspectRatioByExpanding для заполнения высоты
+            graphicsViewFrame.fitInView(pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+            graphicsViewFrame.centerOn(pixmap_item)
+        else:
+            # Горизонтальная ориентация - используем стандартный fitInView
+            graphicsViewFrame.fitInView(pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            graphicsViewFrame.centerOn(pixmap_item)
 
     _perform_fit()
