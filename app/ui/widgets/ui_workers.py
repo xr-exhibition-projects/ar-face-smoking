@@ -149,16 +149,21 @@ class InputFacesLoaderWorker(qtc.QThread):
             print(f"[Startup] InputFacesLoaderWorker: loaded {landmark_detect_model} in {time.time() - t0:.2f}s")
         elif control['LandmarkDetectToggle']:
             print(f"[Startup] InputFacesLoaderWorker: {landmark_detect_model} already loaded")
+        # Оптимизация: не загружаем все модели распознавания сразу
+        # ModelWarmupWorker уже загрузил основную модель, остальные загружаются по требованию
+        # Это ускоряет старт приложения
         t0 = time.time()
         loaded_count = 0
-        for recognition_model in ['Inswapper128ArcFace', 'SimSwapArcFace', 'GhostArcFace', 'CSCSArcFace', 'CSCSIDArcFace']:
-            if recognition_model not in models_processor.models or models_processor.models[recognition_model] is None:
-                t1 = time.time()
-                models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
-                loaded_count += 1
-                print(f"[Startup] InputFacesLoaderWorker: loaded {recognition_model} in {time.time() - t1:.2f}s")
+        # Загружаем только основную модель распознавания, если она еще не загружена
+        recognition_model = control.get('RecognitionModelSelection', 'Inswapper128ArcFace')
+        if recognition_model not in models_processor.models or models_processor.models[recognition_model] is None:
+            t1 = time.time()
+            models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
+            loaded_count += 1
+            print(f"[Startup] InputFacesLoaderWorker: loaded {recognition_model} in {time.time() - t1:.2f}s")
+        # Остальные модели загружаются по требованию (lazy loading)
         if loaded_count > 0:
-            print(f"[Startup] InputFacesLoaderWorker: loaded {loaded_count} recognition models in {time.time() - t0:.2f}s")
+            print(f"[Startup] InputFacesLoaderWorker: loaded {loaded_count} recognition model(s) in {time.time() - t0:.2f}s")
         if was_playing:
             self.main_window.buttonMediaPlay.click()
         elapsed = time.time() - t_start

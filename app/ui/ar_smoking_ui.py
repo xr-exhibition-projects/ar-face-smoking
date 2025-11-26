@@ -150,6 +150,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         print(f"[Startup] ModelWarmupWorker.start() called in {time.time() - t0:.2f}s (worker runs in background)")
         # НЕ вызываем _load_default_input_faces() здесь - дождёмся завершения warmup
         
+        # Откладываем медленные операции - выполняем их асинхронно после показа UI
+        # _request_webcam_listing() и _show_welcome_overlay() выполняются быстро,
+        # но загрузка изображений в welcome overlay может быть отложена
         t0 = time.time()
         self._request_webcam_listing()
         print(f"[Startup] _request_webcam_listing() completed in {time.time() - t0:.2f}s")
@@ -232,28 +235,28 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         self._ensure_control_panel_widget()
 
-        # Добавляем собственную кнопку поверх видео
+        # Загружаем только критичные изображения сразу (кнопки)
+        # Остальные изображения загружаем асинхронно после показа UI
         self._start_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_START))
         self._finish_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_FINISH))
-        self._welcome_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_WELCOME))
-        self._overlay_frames: list[QtGui.QPixmap] = [
-            QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_1)),
-        ]
-        self._overlay_static = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_2))
-        self._overlay_mask = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_3))
+        
+        # Откладываем загрузку welcome и death изображений - они не нужны сразу
+        self._welcome_pixmap: Optional[QtGui.QPixmap] = None
+        self._overlay_frames: list[QtGui.QPixmap] = []
+        self._overlay_static: Optional[QtGui.QPixmap] = None
+        self._overlay_mask: Optional[QtGui.QPixmap] = None
         self._overlay_frame_index: int = 0
         self._overlay_timer: Optional[QtCore.QTimer] = None
-        death_frame_paths = DEATH_FRAME_PATHS
-        self._death_frames: list[QtGui.QPixmap] = [
-            QtGui.QPixmap(self._resource_path(path)) for path in death_frame_paths
-        ]
-        self._death_frames = [frame for frame in self._death_frames if not frame.isNull()]
-        self._death_intro_frame = self._death_frames[0] if self._death_frames else None
+        
+        # Death frames загружаем асинхронно
+        self._death_frames: list[QtGui.QPixmap] = []
+        self._death_intro_frame: Optional[QtGui.QPixmap] = None
         self._death_frame_index: int = 0
         self._death_anim_timer: Optional[QtCore.QTimer] = None
-        self._current_death_frame: Optional[QtGui.QPixmap] = (
-            self._death_intro_frame if self._death_intro_frame and not self._death_intro_frame.isNull() else None
-        )
+        self._current_death_frame: Optional[QtGui.QPixmap] = None
+        
+        # Загружаем изображения асинхронно после показа UI
+        QtCore.QTimer.singleShot(100, self._load_deferred_images)
         self._welcome_timer: Optional[QtCore.QTimer] = None
         self._welcome_duration_ms: int = 45_000
         self._welcome_active: bool = False
@@ -779,7 +782,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         if not self.selected_video_button:
             if retries < 10:
-                QtCore.QTimer.singleShot(300, lambda: self._prepare_target_faces(retries + 1))
+                QtCore.QTimer.singleShot(100, lambda: self._prepare_target_faces(retries + 1))  # Уменьшено с 300ms до 100ms
             return
 
         was_playing = self.buttonMediaPlay.isChecked()
@@ -805,7 +808,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                     total_elapsed = time.time() - self._startup_start_time
                     print(f"[Startup] Target faces prepared in {total_elapsed:.2f}s (total since init)")
         elif retries < 10:
-            QtCore.QTimer.singleShot(500, lambda: self._prepare_target_faces(retries + 1))
+            QtCore.QTimer.singleShot(200, lambda: self._prepare_target_faces(retries + 1))  # Уменьшено с 500ms до 200ms
         # Убрали показ ошибки здесь - ошибка показывается только при нажатии на кнопку "УПОРОТЬСЯ"
 
     def _assign_input_face(self, button) -> None:
@@ -1602,12 +1605,50 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.deathLabel.move(offset_x, offset_y)
             self.deathLabel.setText("СМЕРТЬ\nНЕИЗБЕЖНА")
 
+    def _load_deferred_images(self) -> None:
+        """Загружает изображения, которые не нужны сразу при старте."""
+        import time
+        t0 = time.time()
+        
+        # Загружаем welcome изображения
+        if self._welcome_pixmap is None:
+            self._welcome_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_WELCOME))
+        if not self._overlay_frames:
+            self._overlay_frames = [
+                QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_1)),
+            ]
+        if self._overlay_static is None:
+            self._overlay_static = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_2))
+        if self._overlay_mask is None:
+            self._overlay_mask = QtGui.QPixmap(self._resource_path(PATH_UI_OVERLAY_3))
+        
+        # Загружаем death frames
+        if not self._death_frames:
+            death_frame_paths = DEATH_FRAME_PATHS
+            self._death_frames = [
+                QtGui.QPixmap(self._resource_path(path)) for path in death_frame_paths
+            ]
+            self._death_frames = [frame for frame in self._death_frames if not frame.isNull()]
+            self._death_intro_frame = self._death_frames[0] if self._death_frames else None
+            self._current_death_frame = (
+                self._death_intro_frame if self._death_intro_frame and not self._death_intro_frame.isNull() else None
+            )
+        
+        print(f"[Startup] _load_deferred_images() completed in {time.time() - t0:.2f}s")
+        
+        # Обновляем welcome overlay если он уже показан
+        if self._welcome_active:
+            self._refresh_welcome_overlay_graphics()
+
     def _show_welcome_overlay(self) -> None:
         if self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
             return
 
         self._welcome_active = True
         self.welcomeOverlay.setGeometry(self.rect())
+        # Если изображения еще не загружены, загружаем их синхронно
+        if self._welcome_pixmap is None:
+            self._load_deferred_images()
         self._refresh_welcome_overlay_graphics()
         self.welcomeOverlay.show()
         self.welcomeOverlay.raise_()
@@ -2245,10 +2286,10 @@ class ARSmokingWindow(main_ui.MainWindow):
                 if attempt == 0 and hasattr(self, '_startup_start_time'):
                     elapsed = time.time() - self._startup_start_time
                     print(f"[Startup] Webcam already opened in {elapsed:.2f}s (total since init)")
-                QtCore.QTimer.singleShot(120, self._ensure_playing)
-                QtCore.QTimer.singleShot(360, self._prepare_target_faces)
-                QtCore.QTimer.singleShot(400, self._position_uporotsya_button)
-                QtCore.QTimer.singleShot(500, self._try_enable_uporotsya)
+                QtCore.QTimer.singleShot(50, self._ensure_playing)
+                QtCore.QTimer.singleShot(100, self._prepare_target_faces)  # Уменьшено с 360ms до 100ms
+                QtCore.QTimer.singleShot(150, self._position_uporotsya_button)
+                QtCore.QTimer.singleShot(200, self._try_enable_uporotsya)
             return
 
         if attempt >= len(self._webcam_backend_candidates):

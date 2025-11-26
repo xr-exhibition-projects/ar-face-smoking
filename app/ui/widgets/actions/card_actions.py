@@ -123,14 +123,11 @@ def find_target_faces(main_window: 'MainWindow'):
                         pixmap = common_widget_actions.get_pixmap_from_frame(main_window, face_img)
 
                         embedding_store: Dict[str, numpy.ndarray] = {}
-                        # Ottenere i valori di 'options'
-                        options = SETTINGS_LAYOUT_DATA['Face Recognition']['RecognitionModelSelection']['options']
-                        for option in options:
-                            if option != control['RecognitionModelSelection']:
-                                target_emb, _ = main_window.models_processor.run_recognize_direct(face[3], face[0], control['SimilarityTypeSelection'], option)
-                                embedding_store[option] = target_emb
-                            else:
-                                embedding_store[control['RecognitionModelSelection']] = face[1]
+                        # Оптимизация: загружаем только основную модель распознавания при старте
+                        # Остальные модели загружаются по требованию (lazy loading)
+                        embedding_store[control['RecognitionModelSelection']] = face[1]
+                        # Остальные embeddings загружаются асинхронно после первого обнаружения лица
+                        # Это ускоряет старт приложения
 
                         face_id = str(uuid.uuid1().int)
 

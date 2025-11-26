@@ -218,35 +218,14 @@ class TargetMediaCardButton(CardButton):
             if media_capture.isOpened():
                 # Установка BUFFERSIZE обычно быстрая
                 media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                # Устанавливаем максимальное разрешение для лучшего качества
-                # Пробуем установить максимальные доступные разрешения в порядке убывания
-                resolutions = [
-                    (3840, 2160),  # 4K
-                    (2560, 1440),  # 2K
-                    (1920, 1080),  # Full HD
-                    (1280, 720),   # HD
-                ]
-                
-                actual_width = 0
-                actual_height = 0
-                for width, height in resolutions:
-                    media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                    media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                    # Даём камере время на установку разрешения
-                    import time as time_module
-                    time_module.sleep(0.1)
-                    actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    # Если разрешение установилось близко к запрошенному, используем его
-                    if abs(actual_width - width) < 50 and abs(actual_height - height) < 50:
-                        print(f"[Startup] Webcam resolution set to: {actual_width}x{actual_height}")
-                        break
-                
-                if actual_width == 0 or actual_height == 0:
-                    # Если ничего не установилось, используем текущее разрешение камеры
-                    actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    print(f"[Startup] Webcam using native resolution: {actual_width}x{actual_height}")
+                # Оптимизация: устанавливаем только одно разрешение (Full HD) для быстрого старта
+                # Пользователь может изменить разрешение позже через настройки
+                media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                # Убираем sleep - камера установит разрешение при первом чтении кадра
+                actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                print(f"[Startup] Webcam resolution: {actual_width}x{actual_height}")
             print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999
@@ -272,6 +251,10 @@ class TargetMediaCardButton(CardButton):
             main_window.video_processor.current_frame = frame
             pixmap = common_widget_actions.get_pixmap_from_frame(main_window, frame)
             graphics_view_actions.update_graphics_view(main_window, pixmap, 0, reset_fit=True)
+        elif self.file_type == 'webcam':
+            # Для webcam не показываем кадр сразу - он появится при первом process_video()
+            # Это ускоряет старт приложения
+            pass
 
         self.reset_related_widgets_and_values()
 
