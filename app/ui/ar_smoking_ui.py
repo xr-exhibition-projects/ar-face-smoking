@@ -1187,8 +1187,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             return True
         if obj == getattr(self, "deathOverlay", None) and event.type() == QtCore.QEvent.MouseButtonRelease:
             if self.deathOverlay.isVisible():
-                # TODO: Implement restart logic
-                pass
+                self._restart_scenario()
             return True
         return super().eventFilter(obj, event)
 
@@ -1453,6 +1452,83 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.configButton.hide()
         if self.mediaToggleButton:
             self.mediaToggleButton.hide()
+
+    def _restart_scenario(self) -> None:
+        """Перезапускает сценарий после экрана смерти.
+        Видео/камера запускается заново, faceswap не выгружается, но не применяется до нажатия на 'упороться'."""
+        # Останавливаем death анимацию
+        self._stop_death_animation()
+        
+        # Скрываем death overlay
+        self.deathOverlay.hide()
+        
+        # Сбрасываем состояние анимации
+        self._stop_face_fade(reset_progress=True)
+        
+        # Выключаем swapfacesButton (faceswap не применяется до нажатия на "упороться")
+        self.swapfacesButton.setChecked(False)
+        self._swap_active = False
+        self._second_press_triggered = False
+        
+        # Скрываем сообщения
+        self.messageLabel.hide()
+        
+        # Скрываем кнопку "упороться" (она появится после welcome overlay)
+        if hasattr(self, "buttonUport") and self.buttonUport:
+            self.buttonUport.hide()
+        
+        # Скрываем control window если открыт
+        if self.control_window and self.control_window.isVisible():
+            self.control_window.hide()
+        
+        # ВАЖНО: НЕ выгружаем selected_video_button и target_faces - они остаются для повторного использования
+        # НЕ очищаем target_videos, input_faces и т.д.
+        
+        # Проверяем, есть ли выбранное видео/камера
+        if not self.selected_video_button:
+            # Если нет выбранного видео, показываем welcome overlay
+            self._show_welcome_overlay()
+            return
+        
+        # Скрываем welcome overlay если он активен
+        if self._welcome_active:
+            if self.welcomeOverlay:
+                self.welcomeOverlay.hide()
+            if self._welcome_timer:
+                self._welcome_timer.stop()
+                self._welcome_timer.deleteLater()
+                self._welcome_timer = None
+            self._stop_overlay_animation()
+            self._welcome_active = False
+        
+        # Если есть выбранное видео/камера, проверяем состояние
+        capture = self.video_processor.media_capture
+        
+        # Если камера/видео закрыта, перезагружаем
+        if not capture or not capture.isOpened():
+            if hasattr(self.selected_video_button, 'load_media'):
+                self.selected_video_button.load_media()
+                # Ждем немного перед запуском обработки
+                QtCore.QTimer.singleShot(300, self._ensure_playing)
+        else:
+            # Камера/видео уже открыта - просто запускаем обработку
+            QtCore.QTimer.singleShot(100, self._ensure_playing)
+        
+        # Сбрасываем кнопку "упороться" в начальное состояние (иконка "start")
+        self._update_uporotsya_button_icon(start=True)
+        self.buttonUport.setCheckable(True)
+        self.buttonUport.setChecked(False)
+        
+        # Показываем кнопку "упороться" после небольшой задержки (чтобы видео успело запуститься)
+        def show_uporotsya_button():
+            self.buttonUport.show()
+            self._position_uporotsya_button()
+            self._try_enable_uporotsya()
+        
+        QtCore.QTimer.singleShot(200, show_uporotsya_button)
+        
+        # Показываем кнопку настроек
+        self.configButton.show()
 
     def _update_uporotsya_button_icon(self, start: bool) -> None:
         pixmap = self._start_pixmap if start else self._finish_pixmap
