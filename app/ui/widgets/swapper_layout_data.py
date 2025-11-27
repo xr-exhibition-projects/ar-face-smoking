@@ -230,7 +230,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'StrengthEnableToggle': {
             'level': 1,
             'label': 'Strength',
-            'default': True,
+            'default': False,
             'help': 'Apply additional swapping iterations to increase the strength of the result, which may increase likeness.'
         },
         'StrengthAmountSlider': {
@@ -247,7 +247,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'FaceLikenessEnableToggle': {
             'level': 1,
             'label': 'Face Likeness',
-            'default': True,
+            'default': False,
             'help': 'This is a feature to perform direct adjustments to likeness of faces.'
         },
         'FaceLikenessFactorDecimalSlider': {
