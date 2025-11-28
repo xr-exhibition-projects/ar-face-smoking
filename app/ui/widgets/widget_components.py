@@ -218,11 +218,14 @@ class TargetMediaCardButton(CardButton):
             if media_capture.isOpened():
                 # Установка BUFFERSIZE обычно быстрая
                 media_capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                # НЕ устанавливаем разрешение сразу - это может занимать много времени на медленных камерах/драйверах
-                # Камера будет использовать своё родное разрешение, которое обычно уже оптимальное
-                # Если нужно конкретное разрешение, его можно установить позже через настройки
-                # media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                # media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                # Устанавливаем разрешение ДО первого чтения кадра - это оптимально
+                # Камера применяет настройки при первом read(), поэтому установка до read() быстрее
+                # Используем try-except для обработки ошибок на камерах, которые не поддерживают это разрешение
+                try:
+                    media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                    media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                except Exception as e:
+                    print(f"[Startup] Warning: Could not set webcam resolution to 1920x1080: {e}")
             print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999
@@ -231,7 +234,7 @@ class TargetMediaCardButton(CardButton):
             read_frame_time = time.time() - t0
             print(f"[Startup] First frame read from webcam in {read_frame_time:.2f}s (this is usually the slowest step)")
             
-            # Читаем разрешение после первого кадра (быстрее, чем до чтения)
+            # Читаем фактическое разрешение из первого кадра
             if frame is not None:
                 actual_width = frame.shape[1]
                 actual_height = frame.shape[0]
