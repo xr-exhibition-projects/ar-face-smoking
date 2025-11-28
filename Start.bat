@@ -1,5 +1,5 @@
 
-call conda activate visomaster
+call conda activate env50
 REM Оптимизация: проверяем, нужно ли конвертировать UI файлы
 REM Конвертируем только если UI файл новее сгенерированного Python файла
 if not exist "app\ui\core\main_window.py" (
