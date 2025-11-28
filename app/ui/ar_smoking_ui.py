@@ -82,6 +82,12 @@ class ControlOptionsWindow(QtWidgets.QMainWindow):
 class ARSmokingWindow(main_ui.MainWindow):
     """Упрощённый интерфейс для live faceswap через веб-камеру."""
 
+    _BUTTON_MIN_WIDTH: int = 280
+    _BUTTON_MAX_WIDTH: int = 560
+    _BUTTON_FRAME_RATIO: float = 0.9
+    _BUTTON_MARGIN: int = 40
+    _LABEL_FRAME_RATIO: float = 0.9
+
     def __init__(self) -> None:
         self._auto_target_selected = False
         self._auto_face_selected = False
@@ -122,6 +128,15 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._animation_config = self._load_animation_config()
         self._animation_stages = self._animation_config.get("animation_stages", {})
         self._death_delay_timer: Optional[QtCore.QTimer] = None
+        
+        # Cached UI sizes to keep controls stable between restarts
+        self._button_size_dirty: bool = True
+        self._button_width_cache: Optional[int] = None
+        self._button_text_min_width: Optional[int] = None
+        self._message_label_size_dirty: bool = True
+        self._impossible_label_pixmap_cache: Optional[QtGui.QPixmap] = None
+        self._impossible_label_text_size_cache: Optional[QtCore.QSize] = None
+        self._last_border_frame_size: Optional[tuple[int, int]] = None
         
         # Face loading state
         self._faces_loading_in_progress: bool = False
@@ -173,6 +188,7 @@ class ARSmokingWindow(main_ui.MainWindow):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         was_processing = getattr(self, "video_processor", None) and self.video_processor.processing
         super().resizeEvent(event)
+        self._invalidate_overlay_sizes()
         if hasattr(self, "overlayLayer") and self.overlayLayer:
             self.overlayLayer.setGeometry(self.rect())
         self._position_uporotsya_button()
@@ -421,6 +437,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Кнопка всегда скрыта
         self.mediaToggleButton.hide()
         self._update_media_toggle_button()
+        QtCore.QTimer.singleShot(0, self._position_border_frame)
+        QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+        QtCore.QTimer.singleShot(0, self._position_impossible_label)
 
         # Убираем лишние отступы
         self.centralwidget.setContentsMargins(0, 0, 0, 0)
@@ -1045,6 +1064,15 @@ class ARSmokingWindow(main_ui.MainWindow):
             if child_layout:
                 self._clear_layout(child_layout)
 
+    def _invalidate_overlay_sizes(self) -> None:
+        """Marks cached button/label sizes for recompute on next resize-aware update."""
+        self._button_size_dirty = True
+        self._button_width_cache = None
+        self._button_text_min_width = None
+        self._message_label_size_dirty = True
+        self._impossible_label_pixmap_cache = None
+        self._impossible_label_text_size_cache = None
+
     def _position_uporotsya_button(self) -> None:
         if not hasattr(self, "buttonUport") or self.buttonUport is None:
             return
@@ -1074,22 +1102,30 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Если рамка видима, используем её ширину как максимальную ширину кнопки
         if border_frame_width is not None and border_frame_width > 0:
-            max_button_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
+            max_button_width = int(border_frame_width * self._BUTTON_FRAME_RATIO)
             display_width = min(display_width, max_button_width)
 
         self._refresh_button_size()
         button_width = self.buttonUport.width()
         button_height = self.buttonUport.height()
         if button_width <= 0 or button_height <= 0:
-            button_width = max(200, int(display_width * 0.9))
+            button_width = max(
+                self._BUTTON_MIN_WIDTH, min(display_width, self._BUTTON_MAX_WIDTH)
+            )
             button_height = 48
         
         # Ограничиваем ширину кнопки шириной рамки, если рамка видима
         if border_frame_width is not None and border_frame_width > 0:
-            button_width = min(button_width, int(border_frame_width * 0.9))
-        
+            button_width = min(button_width, int(border_frame_width * self._BUTTON_FRAME_RATIO))
+        else:
+            button_width = min(button_width, self._BUTTON_MAX_WIDTH)
+        button_width = max(self._BUTTON_MIN_WIDTH, button_width)
+
+        frame_height = self._get_border_frame_height()
+        vertical_offset = frame_height if frame_height and frame_height > 0 else height
+        vertical_offset = int(vertical_offset * 0.15)
         pos_x = vx + max(0, (width - button_width) // 2)
-        pos_y = vy + max(0, height - button_height - 24)
+        pos_y = vy + max(0, height - button_height - vertical_offset)
         self.buttonUport.setGeometry(pos_x, pos_y, button_width, button_height)
         # Кнопка всегда должна быть поверх рамки
         self.buttonUport.raise_()
@@ -1116,11 +1152,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         border_frame_width = self._get_border_frame_width()
         if border_frame_width is not None and border_frame_width > 0:
             # Используем ширину рамки как максимальную ширину
-            max_button_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
-            display_width = min(display_width, max_button_width)
+            max_button_width = int(border_frame_width * self._BUTTON_FRAME_RATIO)
+        else:
+            max_button_width = self._BUTTON_MAX_WIDTH
+        display_width = min(display_width, max_button_width)
         
-        margin = 40
-        return max(1, min(display_width - margin, width - margin))
+        margin = self._BUTTON_MARGIN
+        base_width = max(1, min(display_width - margin, width - margin))
+        return max(self._BUTTON_MIN_WIDTH, min(base_width, max_button_width))
 
     def _compute_frame_display_width(self) -> int:
         viewport = self.graphicsViewFrame.viewport()
@@ -1158,6 +1197,53 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtCore.Qt.AspectRatioMode.KeepAspectRatio,
             QtCore.Qt.TransformationMode.SmoothTransformation,
         )
+
+    def _get_impossible_label_pixmap(self, force: bool = False) -> Optional[QtGui.QPixmap]:
+        if force:
+            self._message_label_size_dirty = True
+        if (
+            not self._message_label_size_dirty
+            and self._impossible_label_pixmap_cache is not None
+            and not self._impossible_label_pixmap_cache.isNull()
+        ):
+            return self._impossible_label_pixmap_cache
+        if not self._impossible_pixmap or self._impossible_pixmap.isNull():
+            return None
+        max_label_width = self._compute_available_button_width()
+        if max_label_width <= 0:
+            max_label_width = self._impossible_pixmap.width()
+        if self._impossible_pixmap.width() <= max_label_width:
+            scaled_pixmap = QtGui.QPixmap(self._impossible_pixmap)
+        else:
+            scale_factor = max_label_width / self._impossible_pixmap.width()
+            target_height = max(1, int(self._impossible_pixmap.height() * scale_factor))
+            scaled_pixmap = self._impossible_pixmap.scaled(
+                max_label_width,
+                target_height,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+        self._impossible_label_pixmap_cache = scaled_pixmap
+        self._message_label_size_dirty = False
+        return scaled_pixmap
+
+    def _apply_impossible_text_size(self) -> None:
+        self.messageLabel.setPixmap(QtGui.QPixmap())
+        text = "НЕВОЗМОЖНО"
+        self.messageLabel.setText(text)
+        available_width = self._compute_available_button_width()
+        if available_width <= 0:
+            available_width = self._BUTTON_MAX_WIDTH
+        if self._message_label_size_dirty or self._impossible_label_text_size_cache is None:
+            fm = self.messageLabel.fontMetrics()
+            width = min(available_width, max(self._BUTTON_MIN_WIDTH, fm.horizontalAdvance(text) + 24))
+            button_height = getattr(self, "buttonUport", None).height() if hasattr(self, "buttonUport") and self.buttonUport else 48
+            height = max(button_height, fm.height() + 12)
+            self._impossible_label_text_size_cache = QtCore.QSize(max(1, width), max(1, height))
+            self._message_label_size_dirty = False
+        if self._impossible_label_text_size_cache:
+            width = min(self._impossible_label_text_size_cache.width(), available_width)
+            self.messageLabel.setFixedSize(width, self._impossible_label_text_size_cache.height())
 
     def _position_config_button(self) -> None:
         if not hasattr(self, "configButton") or self.configButton is None:
@@ -1204,48 +1290,76 @@ class ARSmokingWindow(main_ui.MainWindow):
         display_width = min(width, int(height * aspect_ratio))
         display_width = max(1, display_width)
 
-        # Определяем размеры надписи
-        if self.messageLabel.pixmap():
-            label_width = self.messageLabel.pixmap().width()
-            label_height = self.messageLabel.pixmap().height()
+        available_width = self._compute_available_button_width()
+        label_pixmap = self.messageLabel.pixmap()
+        if label_pixmap and not label_pixmap.isNull():
+            if self._message_label_size_dirty:
+                scaled = self._get_impossible_label_pixmap(force=True)
+            else:
+                scaled = self._get_impossible_label_pixmap()
+            if scaled and not scaled.isNull():
+                self.messageLabel.setPixmap(scaled)
+                self.messageLabel.setFixedSize(scaled.size())
         else:
-            label_width = self.messageLabel.sizeHint().width()
-            label_height = self.messageLabel.sizeHint().height()
-        
-        # Если рамка видима, ограничиваем ширину надписи шириной рамки
-        if border_frame_width is not None and border_frame_width > 0:
-            max_label_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
-            label_width = min(label_width, max_label_width)
-            # Если это pixmap, нужно перемасштабировать
-            if self.messageLabel.pixmap() and not self.messageLabel.pixmap().isNull():
-                original_pixmap = self.messageLabel.pixmap()
-                if original_pixmap.width() > max_label_width:
-                    scale_factor = max_label_width / original_pixmap.width()
-                    scaled_pixmap = original_pixmap.scaled(
-                        max_label_width,
-                        int(original_pixmap.height() * scale_factor),
-                        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                        QtCore.Qt.TransformationMode.SmoothTransformation,
-                    )
-                    self.messageLabel.setPixmap(scaled_pixmap)
-                    label_width = scaled_pixmap.width()
-                    label_height = scaled_pixmap.height()
-        
-        # Используем ту же логику позиционирования, что и для кнопки
+            self._apply_impossible_text_size()
+
+        label_width = min(self.messageLabel.width(), available_width if available_width > 0 else self.messageLabel.width())
+        label_height = self.messageLabel.height()
+
+        frame_height_value = self._get_border_frame_height()
+        vertical_offset = frame_height_value if frame_height_value and frame_height_value > 0 else height
+        vertical_offset = int(vertical_offset * 0.15)
+
         pos_x = vx + max(0, (width - label_width) // 2)
-        pos_y = vy + max(0, height - label_height - 24)
+        pos_y = vy + max(0, height - label_height - vertical_offset)
         
         self.messageLabel.setGeometry(pos_x, pos_y, label_width, label_height)
         # Надпись всегда должна быть поверх рамки
         self.messageLabel.raise_()
 
     def _get_border_frame_width(self) -> Optional[int]:
-        """Возвращает ширину рамки, если она видима, иначе None."""
+        """Возвращает ширину рамки или прогноз, если рамка пока скрыта."""
         if not hasattr(self, "borderFrameLabel") or self.borderFrameLabel is None:
+            return self._estimate_border_frame_width()
+        if self.borderFrameLabel.isVisible():
+            return self.borderFrameLabel.width()
+        if self._last_border_frame_size:
+            return self._last_border_frame_size[0]
+        return self._estimate_border_frame_width()
+
+    def _estimate_border_frame_width(self) -> Optional[int]:
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
             return None
-        if not self.borderFrameLabel.isVisible():
+        frame_height = height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > width:
+            frame_width = width
+            frame_height = int(frame_width * 16 / 9)
+        return frame_width
+
+    def _get_border_frame_height(self) -> Optional[int]:
+        """Возвращает высоту рамки или прогноз, если рамка пока скрыта."""
+        if not hasattr(self, "borderFrameLabel") or self.borderFrameLabel is None:
+            return self._estimate_border_frame_height()
+        if self.borderFrameLabel.isVisible():
+            return self.borderFrameLabel.height()
+        if self._last_border_frame_size:
+            return self._last_border_frame_size[1]
+        return self._estimate_border_frame_height()
+
+    def _estimate_border_frame_height(self) -> Optional[int]:
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
             return None
-        return self.borderFrameLabel.width()
+        frame_height = height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > width:
+            frame_width = width
+            frame_height = int(frame_width * 16 / 9)
+        return frame_height
     
     def _position_border_frame(self) -> None:
         """Позиционирует рамку поверх видеопотока, по центру, с теми же пропорциями, что и welcome/death экраны."""
@@ -1290,6 +1404,12 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Держим рамку ниже остальных элементов
         self.borderFrameLabel.lower()
+        new_border_size = (self.borderFrameLabel.width(), self.borderFrameLabel.height())
+        if self._last_border_frame_size != new_border_size:
+            self._last_border_frame_size = new_border_size
+            self._invalidate_overlay_sizes()
+            QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
+            QtCore.QTimer.singleShot(0, self._position_impossible_label)
 
     def _update_media_toggle_button(self) -> None:
         if not self.mediaToggleButton:
@@ -1309,6 +1429,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if obj == self.graphicsViewFrame.viewport() and event.type() == QtCore.QEvent.Resize:
+            self._invalidate_overlay_sizes()
             QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
             QtCore.QTimer.singleShot(0, self._position_impossible_label)
             QtCore.QTimer.singleShot(0, self._position_border_frame)
@@ -1549,25 +1670,15 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _show_impossible_message(self) -> None:
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
+        scaled_pixmap = None
         if self._impossible_pixmap and not self._impossible_pixmap.isNull():
-            # Получаем ширину рамки для ограничения размера надписи
-            border_frame_width = self._get_border_frame_width()
-            if border_frame_width is not None and border_frame_width > 0:
-                # Ограничиваем ширину надписи 90% от ширины рамки
-                max_label_width = int(border_frame_width * 0.9)
-                scaled_pixmap = self._impossible_pixmap.scaled(
-                    max_label_width,
-                    int(self._impossible_pixmap.height() * (max_label_width / self._impossible_pixmap.width())),
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
-            else:
-                scaled_pixmap = self._scaled_button_pixmap(self._impossible_pixmap)
+            scaled_pixmap = self._get_impossible_label_pixmap()
+        if scaled_pixmap and not scaled_pixmap.isNull():
             self.messageLabel.setPixmap(scaled_pixmap)
             self.messageLabel.setFixedSize(scaled_pixmap.size())
             self.messageLabel.setText("")
         else:
-            self.messageLabel.setText("НЕВОЗМОЖНО")
+            self._apply_impossible_text_size()
         self.messageLabel.show()
         self._position_impossible_label()
         # Надпись всегда должна быть поверх рамки
@@ -1694,8 +1805,22 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._refresh_button_size()
         QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
 
-    def _refresh_button_size(self) -> None:
-        available_width = self._compute_available_button_width()
+    def _refresh_button_size(self, force: bool = False) -> None:
+        if force:
+            self._button_size_dirty = True
+        if self._button_width_cache is None or self._button_size_dirty:
+            available_width = self._compute_available_button_width()
+            if available_width <= 0:
+                available_width = self._BUTTON_MIN_WIDTH
+            self._button_width_cache = available_width
+            self._button_text_min_width = (
+                max(self._BUTTON_MIN_WIDTH, min(available_width, self.width()))
+                if available_width > 0
+                else self._BUTTON_MIN_WIDTH
+            )
+            self._button_size_dirty = False
+        available_width = self._button_width_cache or self._BUTTON_MIN_WIDTH
+        min_width = self._button_text_min_width or self._BUTTON_MIN_WIDTH
         if self._current_button_pixmap and not self._current_button_pixmap.isNull():
             scaled_pixmap = self._scaled_button_pixmap(self._current_button_pixmap, available_width)
             icon = QtGui.QIcon(scaled_pixmap)
@@ -1707,10 +1832,6 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonUport.setIcon(QtGui.QIcon())
             text = "УПОРОТЬСЯ" if self._button_icon_state == "start" else "СЛЕЗТЬ"
             self.buttonUport.setText(text)
-            if available_width <= 0:
-                min_width = 200
-            else:
-                min_width = max(200, min(available_width, self.width()))
             self.buttonUport.setMinimumSize(min_width, 48)
 
     def _refresh_death_overlay_graphics(self) -> None:
