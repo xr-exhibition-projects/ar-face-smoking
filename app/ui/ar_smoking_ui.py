@@ -10,7 +10,7 @@ import uuid
 
 import numpy as np
 import qdarktheme
-from PySide6 import QtCore, QtWidgets, QtGui
+from PySide6 import QtCore, QtWidgets, QtGui, QtSvg
 import shiboken6
 
 from app.ui import main_ui
@@ -41,7 +41,7 @@ PATH_UI_FINISH = f"{ASSETS_UI_DIR}/finish.png"
 PATH_UI_WELCOME = f"{ASSETS_UI_DIR}/not_museum.png"
 PATH_UI_IMPOSSIBLE = f"{ASSETS_UI_DIR}/impossible.png"
 PATH_UI_DEATH = f"{ASSETS_UI_DIR}/death.png"
-PATH_UI_BORDER_FRAME = f"{ASSETS_UI_DIR}/border_frame.png"
+PATH_UI_BORDER_FRAME = f"{ASSETS_UI_DIR}/border_frame.svg"
 
 # Overlay image paths
 PATH_UI_OVERLAY_1 = f"{ASSETS_UI_DIR}/overlay/1.png"
@@ -142,6 +142,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._video_fade_effect: Optional[QtWidgets.QGraphicsOpacityEffect] = None
         self._video_fade_anim: Optional[QtCore.QPropertyAnimation] = None
         self._viewport_mask_active: bool = False
+        self._border_frame_renderer: Optional[QtSvg.QSvgRenderer] = None
+        self._border_frame_pixmap: Optional[QtGui.QPixmap] = None
         
         # Face loading state
         self._faces_loading_in_progress: bool = False
@@ -341,9 +343,19 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.borderFrameLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.borderFrameLabel.setStyleSheet("background-color: transparent; border: none;")
         self.borderFrameLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        border_frame_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_BORDER_FRAME))
-        if not border_frame_pixmap.isNull():
-            self.borderFrameLabel.setPixmap(border_frame_pixmap)
+        border_frame_path = self._resource_path(PATH_UI_BORDER_FRAME)
+        if QtCore.QFileInfo(border_frame_path).suffix().lower() == "svg":
+            renderer = QtSvg.QSvgRenderer(border_frame_path)
+            if renderer.isValid():
+                self._border_frame_renderer = renderer
+            else:
+                self._border_frame_pixmap = QtGui.QPixmap(border_frame_path)
+                if not self._border_frame_pixmap.isNull():
+                    self.borderFrameLabel.setPixmap(self._border_frame_pixmap)
+        else:
+            self._border_frame_pixmap = QtGui.QPixmap(border_frame_path)
+            if not self._border_frame_pixmap.isNull():
+                self.borderFrameLabel.setPixmap(self._border_frame_pixmap)
         self.borderFrameLabel.hide()
         self._update_viewport_mask(clear=True)
 
@@ -1511,19 +1523,27 @@ class ARSmokingWindow(main_ui.MainWindow):
         offset_y = (height - frame_height) // 2
         
         # Масштабируем изображение рамки
-        if self.borderFrameLabel.pixmap() and not self.borderFrameLabel.pixmap().isNull():
-            pixmap = self.borderFrameLabel.pixmap()
-            scaled = pixmap.scaled(
+        rendered_pixmap = None
+        if self._border_frame_renderer and self._border_frame_renderer.isValid():
+            rendered_pixmap = QtGui.QPixmap(frame_width, frame_height)
+            rendered_pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+            painter = QtGui.QPainter(rendered_pixmap)
+            self._border_frame_renderer.render(painter)
+            painter.end()
+        elif self._border_frame_pixmap and not self._border_frame_pixmap.isNull():
+            rendered_pixmap = self._border_frame_pixmap.scaled(
                 frame_width,
                 frame_height,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
-            self.borderFrameLabel.setPixmap(scaled)
-            self.borderFrameLabel.setFixedSize(scaled.size())
+
+        if rendered_pixmap and not rendered_pixmap.isNull():
+            self.borderFrameLabel.setPixmap(rendered_pixmap)
+            self.borderFrameLabel.setFixedSize(rendered_pixmap.size())
             self.borderFrameLabel.move(
-                offset_x + (frame_width - scaled.width()) // 2,
-                offset_y + (frame_height - scaled.height()) // 2,
+                offset_x + (frame_width - rendered_pixmap.width()) // 2,
+                offset_y + (frame_height - rendered_pixmap.height()) // 2,
             )
         else:
             self.borderFrameLabel.setFixedSize(frame_width, frame_height)
