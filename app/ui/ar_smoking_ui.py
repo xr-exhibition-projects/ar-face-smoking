@@ -141,6 +141,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.videoFadeOverlay: Optional[QtWidgets.QWidget] = None
         self._video_fade_effect: Optional[QtWidgets.QGraphicsOpacityEffect] = None
         self._video_fade_anim: Optional[QtCore.QPropertyAnimation] = None
+        self._viewport_mask_active: bool = False
         
         # Face loading state
         self._faces_loading_in_progress: bool = False
@@ -344,6 +345,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         if not border_frame_pixmap.isNull():
             self.borderFrameLabel.setPixmap(border_frame_pixmap)
         self.borderFrameLabel.hide()
+        self._update_viewport_mask(clear=True)
 
         self.deathOverlay = QtWidgets.QWidget(self)
         self.deathOverlay.setStyleSheet("background-color: #000000;")
@@ -1409,6 +1411,39 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self.videoFadeOverlay:
             self.videoFadeOverlay.hide()
 
+    def _update_viewport_mask(self, clear: bool = False) -> None:
+        viewport_widget = getattr(self, "graphicsViewFrame", None)
+        viewport = viewport_widget.viewport() if viewport_widget else None
+        if not viewport:
+            return
+        border_label = getattr(self, "borderFrameLabel", None)
+        if (
+            clear
+            or border_label is None
+            or not border_label.isVisible()
+            or border_label.width() <= 0
+            or border_label.height() <= 0
+        ):
+            if self._viewport_mask_active:
+                viewport.clearMask()
+                self._viewport_mask_active = False
+            return
+
+        top_left_global = border_label.mapToGlobal(QtCore.QPoint(0, 0))
+        bottom_right_global = border_label.mapToGlobal(border_label.rect().bottomRight())
+        top_left = viewport.mapFromGlobal(top_left_global)
+        bottom_right = viewport.mapFromGlobal(bottom_right_global)
+        mask_rect = QtCore.QRect(top_left, bottom_right).normalized()
+        mask_rect = mask_rect.intersected(QtCore.QRect(0, 0, viewport.width(), viewport.height()))
+        if mask_rect.isEmpty():
+            if self._viewport_mask_active:
+                viewport.clearMask()
+                self._viewport_mask_active = False
+            return
+
+        viewport.setMask(QtGui.QRegion(mask_rect))
+        self._viewport_mask_active = True
+
     def _get_border_frame_width(self) -> Optional[int]:
         """Возвращает ширину рамки или прогноз, если рамка пока скрыта."""
         if not hasattr(self, "borderFrameLabel") or self.borderFrameLabel is None:
@@ -1496,6 +1531,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Держим рамку ниже остальных элементов
         self.borderFrameLabel.lower()
+        self._update_viewport_mask()
         new_border_size = (self.borderFrameLabel.width(), self.borderFrameLabel.height())
         if self._last_border_frame_size != new_border_size:
             self._last_border_frame_size = new_border_size
@@ -1810,6 +1846,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Скрываем рамку, когда показывается death overlay
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self.borderFrameLabel.hide()
+            self._update_viewport_mask(clear=True)
 
     def _restart_scenario(self) -> None:
         """Перезапускает сценарий после экрана смерти.
@@ -1886,6 +1923,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
                 self._position_border_frame()
                 self.borderFrameLabel.show()
+                self._update_viewport_mask()
         
         QtCore.QTimer.singleShot(200, show_uporotsya_button)
         
@@ -2023,6 +2061,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Скрываем рамку, когда показывается welcome overlay
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self.borderFrameLabel.hide()
+            self._update_viewport_mask(clear=True)
 
         if self._welcome_timer:
             self._welcome_timer.stop()
@@ -2269,6 +2308,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self._position_border_frame()
             self.borderFrameLabel.show()
+            self._update_viewport_mask()
 
     def _initialize_post_welcome_state(self) -> None:
         if self.welcomeOverlay:
@@ -2289,6 +2329,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             QtCore.QTimer.singleShot(0, self._position_border_frame)
             self.borderFrameLabel.show()
+            QtCore.QTimer.singleShot(0, self._update_viewport_mask)
 
     def _open_control_options_window(self) -> None:
         if not self._ensure_control_panel_widget():
