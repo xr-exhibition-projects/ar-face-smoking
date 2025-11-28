@@ -87,6 +87,7 @@ class ARSmokingWindow(main_ui.MainWindow):
     _BUTTON_FRAME_RATIO: float = 0.9
     _BUTTON_MARGIN: int = 40
     _LABEL_FRAME_RATIO: float = 0.9
+    _VIDEO_FADE_TARGET_OPACITY: float = 0.3
 
     def __init__(self) -> None:
         self._auto_target_selected = False
@@ -137,6 +138,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._impossible_label_pixmap_cache: Optional[QtGui.QPixmap] = None
         self._impossible_label_text_size_cache: Optional[QtCore.QSize] = None
         self._last_border_frame_size: Optional[tuple[int, int]] = None
+        self.videoFadeOverlay: Optional[QtWidgets.QWidget] = None
+        self._video_fade_effect: Optional[QtWidgets.QGraphicsOpacityEffect] = None
+        self._video_fade_anim: Optional[QtCore.QPropertyAnimation] = None
         
         # Face loading state
         self._faces_loading_in_progress: bool = False
@@ -193,6 +197,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.overlayLayer.setGeometry(self.rect())
         self._position_uporotsya_button()
         self._position_impossible_label()
+        self._update_video_fade_overlay_geometry()
         self._position_border_frame()
         if self.deathOverlay.isVisible():
             self.deathOverlay.setGeometry(self.rect())
@@ -287,6 +292,17 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.overlayLayer.setStyleSheet("background-color: transparent;")
         self.overlayLayer.setGeometry(self.rect())
         self.overlayLayer.raise_()
+
+        self.videoFadeOverlay = QtWidgets.QWidget(self.overlayLayer)
+        self.videoFadeOverlay.setObjectName("videoFadeOverlay")
+        self.videoFadeOverlay.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.videoFadeOverlay.setStyleSheet("background-color: #000000;")
+        self.videoFadeOverlay.hide()
+        self._video_fade_effect = QtWidgets.QGraphicsOpacityEffect(self.videoFadeOverlay)
+        self._video_fade_effect.setOpacity(0.0)
+        self.videoFadeOverlay.setGraphicsEffect(self._video_fade_effect)
+        self._update_video_fade_overlay_geometry()
+        self.videoFadeOverlay.lower()
 
         self.buttonUport = QtWidgets.QPushButton("", parent=self.overlayLayer)
         self.buttonUport.setObjectName("buttonUport")
@@ -1316,6 +1332,82 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.messageLabel.setGeometry(pos_x, pos_y, label_width, label_height)
         # Надпись всегда должна быть поверх рамки
         self.messageLabel.raise_()
+        self._update_video_fade_overlay_geometry()
+
+    def _update_video_fade_overlay_geometry(self) -> None:
+        if not self.videoFadeOverlay:
+            return
+        viewport = self.graphicsViewFrame.viewport()
+        if not viewport:
+            self.videoFadeOverlay.hide()
+            return
+        width = viewport.width()
+        height = viewport.height()
+        if width <= 0 or height <= 0:
+            self.videoFadeOverlay.hide()
+            return
+        viewport_pos = viewport.mapTo(self, QtCore.QPoint(0, 0))
+        self.videoFadeOverlay.setGeometry(viewport_pos.x(), viewport_pos.y(), width, height)
+        # Держим затемнение под кнопками и надписями, но над видео
+        self.videoFadeOverlay.lower()
+        # Показываем overlay если анимация активна или opacity > 0
+        if self._video_fade_anim and self._video_fade_anim.state() == QtCore.QAbstractAnimation.State.Running:
+            self.videoFadeOverlay.show()
+        elif self._video_fade_effect and self._video_fade_effect.opacity() > 0.001:
+            self.videoFadeOverlay.show()
+        else:
+            self.videoFadeOverlay.hide()
+
+    def _start_video_darkening(self, duration_ms: int) -> None:
+        if not self.videoFadeOverlay or not self._video_fade_effect:
+            return
+        # Обновляем геометрию перед показом
+        viewport = self.graphicsViewFrame.viewport()
+        if viewport:
+            width = viewport.width()
+            height = viewport.height()
+            if width > 0 and height > 0:
+                viewport_pos = viewport.mapTo(self, QtCore.QPoint(0, 0))
+                self.videoFadeOverlay.setGeometry(viewport_pos.x(), viewport_pos.y(), width, height)
+        # Показываем overlay и устанавливаем его под кнопками
+        self.videoFadeOverlay.show()
+        self.videoFadeOverlay.lower()
+        if self._video_fade_anim:
+            self._video_fade_anim.stop()
+            self._video_fade_anim.deleteLater()
+        animation = QtCore.QPropertyAnimation(self._video_fade_effect, b"opacity", self)
+        animation.setDuration(max(250, duration_ms))
+        animation.setStartValue(self._video_fade_effect.opacity())
+        animation.setEndValue(self._VIDEO_FADE_TARGET_OPACITY)
+        animation.setEasingCurve(QtCore.QEasingCurve.Type.InOutQuad)
+
+        current_anim = animation
+
+        def on_finished() -> None:
+            if self._video_fade_effect and self.videoFadeOverlay:
+                if self._video_fade_effect.opacity() <= 0.001:
+                    self.videoFadeOverlay.hide()
+                else:
+                    self.videoFadeOverlay.show()
+            if self._video_fade_anim is current_anim:
+                current_anim.deleteLater()
+                self._video_fade_anim = None
+            else:
+                current_anim.deleteLater()
+
+        animation.finished.connect(on_finished)
+        animation.start()
+        self._video_fade_anim = animation
+
+    def _reset_video_darkening(self) -> None:
+        if self._video_fade_anim:
+            self._video_fade_anim.stop()
+            self._video_fade_anim.deleteLater()
+            self._video_fade_anim = None
+        if self._video_fade_effect:
+            self._video_fade_effect.setOpacity(0.0)
+        if self.videoFadeOverlay:
+            self.videoFadeOverlay.hide()
 
     def _get_border_frame_width(self) -> Optional[int]:
         """Возвращает ширину рамки или прогноз, если рамка пока скрыта."""
@@ -1434,6 +1526,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             QtCore.QTimer.singleShot(0, self._position_impossible_label)
             QtCore.QTimer.singleShot(0, self._position_border_frame)
             QtCore.QTimer.singleShot(0, self._position_config_button)
+            QtCore.QTimer.singleShot(0, self._update_video_fade_overlay_geometry)
             QtCore.QTimer.singleShot(0, self._refresh_welcome_overlay_graphics)
         if obj == getattr(self, "welcomeOverlay", None) and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick):
             self._dismiss_welcome_overlay()
@@ -1514,6 +1607,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Запускаем fade-анимацию для плавного проявления эффекта старения
         self._start_fade_timer(end_intensity, duration_ms)
+        self._start_video_darkening(duration_ms)
         
         # Запускаем таймер для показа надписи "Невозможно" и перехода к stage3
         self._stage_start_time = time.monotonic()
@@ -1552,6 +1646,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Запускаем fade-анимацию для плавного проявления эффекта старения
         self._start_fade_timer(end_intensity, duration_ms)
+        # Запускаем затемнение видео
+        self._start_video_darkening(duration_ms)
         
         # Запускаем таймер для показа экрана смерти
         self._stage_start_time = time.monotonic()
@@ -1666,6 +1762,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             # Сбрасываем таймеры этапов
             self._stage_start_time = 0.0
             self._stage_duration_ms = 0
+            self._reset_video_darkening()
 
     def _show_impossible_message(self) -> None:
         if hasattr(self, "buttonUport") and self.buttonUport:
@@ -1689,6 +1786,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
     def _show_death_screen(self) -> None:
         self._cancel_death_delay_timer()
+        self._reset_video_darkening()
         self.messageLabel.hide()
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
