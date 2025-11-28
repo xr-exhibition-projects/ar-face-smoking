@@ -137,7 +137,7 @@ class VideoProcessor(QObject):
             graphics_view_actions.update_graphics_view(self.main_window, pixmap, 0)
 
     def send_frame_to_virtualcam(self, frame: numpy.ndarray):
-        if self.main_window.control['SendVirtCamFramesEnableToggle'] and self.virtcam:
+        if self.main_window.control.get('SendVirtCamFramesEnableToggle', False) and self.virtcam:
             # Check if the dimensions of the frame matches that of the Virtcam object
             # If it doesn't match, reinstantiate the Virtcam object with new dimensions
             height, width, _ = frame.shape

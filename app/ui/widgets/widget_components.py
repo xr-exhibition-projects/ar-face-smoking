@@ -222,10 +222,8 @@ class TargetMediaCardButton(CardButton):
                 # Пользователь может изменить разрешение позже через настройки
                 media_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
                 media_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                # Убираем sleep - камера установит разрешение при первом чтении кадра
-                actual_width = int(media_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-                actual_height = int(media_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                print(f"[Startup] Webcam resolution: {actual_width}x{actual_height}")
+                # НЕ читаем свойства обратно сразу - это занимает много времени на медленных камерах
+                # Разрешение будет установлено при первом чтении кадра
             print(f"[Startup] Webcam properties set in {time.time() - t0:.2f}s")
  
             max_frames_number = 999999
@@ -233,6 +231,12 @@ class TargetMediaCardButton(CardButton):
             _, frame = misc_helpers.read_frame(media_capture)
             read_frame_time = time.time() - t0
             print(f"[Startup] First frame read from webcam in {read_frame_time:.2f}s (this is usually the slowest step)")
+            
+            # Читаем разрешение после первого кадра (быстрее, чем до чтения)
+            if frame is not None:
+                actual_width = frame.shape[1]
+                actual_height = frame.shape[0]
+                print(f"[Startup] Webcam resolution: {actual_width}x{actual_height}")
             
             main_window.video_processor.media_capture = media_capture
             self.media_capture = media_capture
@@ -290,7 +294,7 @@ class TargetMediaCardButton(CardButton):
             common_widget_actions.refresh_frame(main_window)
             layout_actions.fit_image_to_view_onchange(main_window)
 
-        if main_window.control['SendVirtCamFramesEnableToggle'] and self.file_type!='image':
+        if main_window.control.get('SendVirtCamFramesEnableToggle', False) and self.file_type!='image':
             # Re-initialize virtualcam to reset its dimensions with that of the new video
             main_window.video_processor.enable_virtualcam()
 

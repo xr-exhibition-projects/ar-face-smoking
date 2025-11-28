@@ -85,7 +85,11 @@ def save_embeddings_to_file(main_window: 'MainWindow', save_as=False):
 # Parameters are converted to ParametersDict when reading from JSON 
 def convert_parameters_to_supported_type(main_window: 'MainWindow', parameters: dict|ParametersTypes, convert_type: dict|misc_helpers.ParametersDict):
     if convert_type==dict:
-        parameters = parameters.data
+        # Если parameters уже dict, не обращаемся к .data
+        if isinstance(parameters, dict):
+            pass  # Уже dict, ничего не делаем
+        else:
+            parameters = parameters.data
     elif convert_type==misc_helpers.ParametersDict:
         parameters = misc_helpers.ParametersDict(parameters, main_window.default_parameters)
     return parameters

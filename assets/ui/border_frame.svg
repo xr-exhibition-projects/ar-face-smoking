@@ -2,7 +2,7 @@
 <g clip-path="url(#clip0_110_5)">
 <foreignObject x="-30" y="-30" width="1140" height="1980"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(15px);clip-path:url(#bgblur_1_110_5_clip_path);height:100%;width:100%"></div></foreignObject><path data-figma-bg-blur-radius="30" d="M1080 1920H0V0H1080V1920ZM140 180C84.7715 180 40 224.772 40 280V1280C40 1335.23 84.7715 1380 140 1380H940C995.228 1380 1040 1335.23 1040 1280V280C1040 224.772 995.228 180 940 180H140Z" fill="black" fill-opacity="0.1"/>
 <path d="M1080 1920H0V0H1080V1920ZM140 180C84.7715 180 40 224.772 40 280V1280C40 1335.23 84.7715 1380 140 1380H940C995.228 1380 1040 1335.23 1040 1280V280C1040 224.772 995.228 180 940 180H140Z" fill="black" fill-opacity="0.72"/>
-<rect y="1336" width="1080" height="540" fill="url(#paint0_linear_110_5)"/>
+<rect y="1336" width="1080" height="584" fill="url(#paint0_linear_110_5)"/>
 <g clip-path="url(#clip2_110_5)">
 <path d="M120 52.0004H88.2764V60.6065H120V52.0004Z" fill="#9A3E3E"/>
 <path d="M115.13 72.5598H88.2764V81.1659H115.13V72.5598Z" fill="#9A3E3E"/>
@@ -22,7 +22,7 @@
 </g>
 <defs>
 <clipPath id="bgblur_1_110_5_clip_path" transform="translate(30 30)"><path d="M1080 1920H0V0H1080V1920ZM140 180C84.7715 180 40 224.772 40 280V1280C40 1335.23 84.7715 1380 140 1380H940C995.228 1380 1040 1335.23 1040 1280V280C1040 224.772 995.228 180 940 180H140Z"/>
-</clipPath><linearGradient id="paint0_linear_110_5" x1="540" y1="1336" x2="540" y2="1876" gradientUnits="userSpaceOnUse">
+</clipPath><linearGradient id="paint0_linear_110_5" x1="540" y1="1336" x2="540" y2="1920" gradientUnits="userSpaceOnUse">
 <stop stop-opacity="0"/>
 <stop offset="1"/>
 </linearGradient>

@@ -188,9 +188,144 @@ class ARSmokingWindow(main_ui.MainWindow):
     # ------------------------------------------------------------------ #
     #  MainWindow overrides
     # ------------------------------------------------------------------ #
+    def initialize_widgets(self) -> None:  # type: ignore[override]
+        """Переопределяем initialize_widgets чтобы убрать обработчик клика по видео."""
+        from functools import partial
+        from app.ui.widgets.actions import (
+            card_actions,
+            layout_actions,
+            list_view_actions,
+            video_control_actions,
+        )
+        from app.ui.widgets.event_filters import ListWidgetEventFilter, VideoSeekSliderEventFilter, videoSeekSliderLineEditEventFilter
+        
+        # Initialize QListWidget for target media
+        self.targetVideosList.setFlow(QtWidgets.QListWidget.LeftToRight)
+        self.targetVideosList.setWrapping(True)
+        self.targetVideosList.setResizeMode(QtWidgets.QListWidget.Adjust)
+
+        # Initialize QListWidget for face images
+        self.inputFacesList.setFlow(QtWidgets.QListWidget.LeftToRight)
+        self.inputFacesList.setWrapping(True)
+        self.inputFacesList.setResizeMode(QtWidgets.QListWidget.Adjust)
+
+        # Set up Menu Actions
+        layout_actions.set_up_menu_actions(self)
+
+        # Set up placeholder texts in ListWidgets (Target Videos and Input Faces)
+        list_view_actions.set_up_list_widget_placeholder(self, self.targetVideosList)
+        list_view_actions.set_up_list_widget_placeholder(self, self.inputFacesList)
+
+        # Set up click to select and drop action on ListWidgets
+        self.targetVideosList.setAcceptDrops(True)
+        self.targetVideosList.viewport().setAcceptDrops(False)
+        self.inputFacesList.setAcceptDrops(True)
+        self.inputFacesList.viewport().setAcceptDrops(False)
+        list_widget_event_filter = ListWidgetEventFilter(self, self)
+        self.targetVideosList.installEventFilter(list_widget_event_filter)
+        self.targetVideosList.viewport().installEventFilter(list_widget_event_filter)
+        self.inputFacesList.installEventFilter(list_widget_event_filter)
+        self.inputFacesList.viewport().installEventFilter(list_widget_event_filter)
+
+        # Set up folder open buttons for Target and Input
+        self.buttonTargetVideosPath.clicked.connect(partial(list_view_actions.select_target_medias, self, 'folder'))
+        self.buttonInputFacesPath.clicked.connect(partial(list_view_actions.select_input_face_images, self, 'folder'))
+
+        # Initialize graphics frame to view frames
+        self.scene = QtWidgets.QGraphicsScene()
+        self.graphicsViewFrame.setScene(self.scene)
+        # НЕ устанавливаем GraphicsViewEventFilter - убираем обработчик клика по видео
+
+        video_control_actions.enable_zoom_and_pan(self.graphicsViewFrame)
+
+        video_slider_event_filter = VideoSeekSliderEventFilter(self, self.videoSeekSlider)
+        self.videoSeekSlider.installEventFilter(video_slider_event_filter)
+        self.videoSeekSlider.valueChanged.connect(partial(video_control_actions.on_change_video_seek_slider, self))
+        self.videoSeekSlider.sliderPressed.connect(partial(video_control_actions.on_slider_pressed, self))
+        self.videoSeekSlider.sliderReleased.connect(partial(video_control_actions.on_slider_released, self))
+        video_control_actions.set_up_video_seek_slider(self)
+        self.frameAdvanceButton.clicked.connect(partial(video_control_actions.advance_video_slider_by_n_frames, self))
+        self.frameRewindButton.clicked.connect(partial(video_control_actions.rewind_video_slider_by_n_frames, self))
+
+        self.addMarkerButton.clicked.connect(partial(video_control_actions.add_video_slider_marker, self))
+        self.removeMarkerButton.clicked.connect(partial(video_control_actions.remove_video_slider_marker, self))
+        self.nextMarkerButton.clicked.connect(partial(video_control_actions.move_slider_to_next_nearest_marker, self))
+        self.previousMarkerButton.clicked.connect(partial(video_control_actions.move_slider_to_previous_nearest_marker, self))
+
+        self.viewFullScreenButton.clicked.connect(partial(video_control_actions.view_fullscreen, self))
+        # Set up videoSeekLineEdit and add the event filter to handle changes
+        video_control_actions.set_up_video_seek_line_edit(self)
+        video_seek_line_edit_event_filter = videoSeekSliderLineEditEventFilter(self, self.videoSeekLineEdit)
+        self.videoSeekLineEdit.installEventFilter(video_seek_line_edit_event_filter)
+
+        # Connect the Play/Stop button to the play_video method
+        self.buttonMediaPlay.toggled.connect(partial(video_control_actions.play_video, self))
+        self.buttonMediaRecord.toggled.connect(partial(video_control_actions.record_video, self))
+        
+        # Инициализируем control значениями по умолчанию из SETTINGS_LAYOUT_DATA
+        # (без создания виджетов, так как они не нужны в ARSmokingWindow)
+        from app.ui.widgets.settings_layout_data import SETTINGS_LAYOUT_DATA
+        from app.ui.widgets.common_layout_data import COMMON_LAYOUT_DATA
+        from app.ui.widgets.swapper_layout_data import SWAPPER_LAYOUT_DATA
+        from app.ui.widgets.actions import common_actions
+        
+        def convert_default_value(setting_name, default_value):
+            """Конвертирует значение по умолчанию в правильный тип."""
+            # Конвертируем строковые значения слайдеров в числа
+            if 'Slider' in setting_name and isinstance(default_value, str):
+                try:
+                    # Пробуем конвертировать в int, если не получается - в float
+                    if '.' in default_value:
+                        return float(default_value)
+                    else:
+                        return int(default_value)
+                except (ValueError, TypeError):
+                    return default_value
+            # Конвертируем строковые значения Toggle в bool
+            elif 'Toggle' in setting_name and isinstance(default_value, str):
+                return default_value.lower() in ('true', '1', 'yes', 'on')
+            return default_value
+        
+        # Инициализируем control из SETTINGS_LAYOUT_DATA
+        for setting_group in SETTINGS_LAYOUT_DATA.values():
+            for setting_name, setting_data in setting_group.items():
+                if 'default' in setting_data:
+                    default_value = convert_default_value(setting_name, setting_data['default'])
+                    common_actions.create_control(self, setting_name, default_value)
+        
+        # Инициализируем default_parameters из COMMON_LAYOUT_DATA
+        for param_group in COMMON_LAYOUT_DATA.values():
+            for param_name, param_data in param_group.items():
+                if 'default' in param_data:
+                    default_value = convert_default_value(param_name, param_data['default'])
+                    common_actions.create_default_parameter(self, param_name, default_value)
+        
+        # Инициализируем default_parameters из SWAPPER_LAYOUT_DATA
+        for param_group in SWAPPER_LAYOUT_DATA.values():
+            for param_name, param_data in param_group.items():
+                if 'default' in param_data:
+                    default_value = convert_default_value(param_name, param_data['default'])
+                    common_actions.create_default_parameter(self, param_name, default_value)
+        
+        # Также инициализируем OutputMediaFolder
+        common_actions.create_control(self, 'OutputMediaFolder', '')
+        
+        # Инициализируем current_widget_parameters с default_parameters
+        import copy
+        from app.helpers.miscellaneous import ParametersDict
+        self.current_widget_parameters = ParametersDict(copy.deepcopy(self.default_parameters), self.default_parameters)
+    
     def load_last_workspace(self) -> None:  # type: ignore[override]
         """Отключаем автозагрузку рабочего пространства."""
         return
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
+        """Переопределяем closeEvent чтобы не сохранять workspace (не нужен в ARSmokingWindow)."""
+        # Останавливаем обработку видео
+        if hasattr(self, "video_processor") and self.video_processor:
+            self.video_processor.stop_processing()
+        # НЕ вызываем save_current_workspace - не нужно в ARSmokingWindow
+        event.accept()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         was_processing = getattr(self, "video_processor", None) and self.video_processor.processing

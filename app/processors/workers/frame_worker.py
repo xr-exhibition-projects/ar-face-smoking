@@ -53,7 +53,8 @@ class FrameWorker(threading.Thread):
 
             # Process the frame with model inference
             # print(f"Processing frame {self.frame_number}")
-            if self.main_window.swapfacesButton.isChecked() or self.main_window.editFacesButton.isChecked() or self.main_window.control['FrameEnhancerEnableToggle']:
+            frame_enhancer_enabled = self.main_window.control.get('FrameEnhancerEnableToggle', False)
+            if self.main_window.swapfacesButton.isChecked() or self.main_window.editFacesButton.isChecked() or frame_enhancer_enabled:
                 self.frame = self.process_frame()
                 do_swap = self.main_window.swapfacesButton.isChecked()
             else:
@@ -230,7 +231,7 @@ class FrameWorker(threading.Thread):
         if compare_mode:
             img = self.get_compare_faces_image(img, det_faces_data, control)
 
-        if control['FrameEnhancerEnableToggle'] and not compare_mode:
+        if control.get('FrameEnhancerEnableToggle', False) and not compare_mode:
             img = self.enhance_core(img, control=control)
 
         img = img.permute(1,2,0)
@@ -430,7 +431,7 @@ class FrameWorker(threading.Thread):
                 if sim >= parameters['SimilarityThresholdSlider']:
                     modified_face = self.get_cropped_face_using_kps(img, fface['kps_5'], parameters)
                     # Apply frame enhancer
-                    if control['FrameEnhancerEnableToggle']:
+                    if control.get('FrameEnhancerEnableToggle', False):
                         # Enhance the face and resize it to the original size for stacking
                         modified_face_enhance = self.enhance_core(modified_face, control=control)
                         modified_face_enhance = modified_face_enhance.float() / 255.0
