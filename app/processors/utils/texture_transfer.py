@@ -60,11 +60,11 @@ def align_reference_to_target(ref_img: torch.Tensor, ref_kps: np.ndarray, target
         target_size: Target image size.
         target_kps: Target landmarks (5, 2). If None, uses standard arcface template.
     """
-    if target_kps is not None:
-        dst_kps = target_kps
-    else:
+    if target_kps is None:
         dst_kps = faceutil.get_arcface_template(image_size=target_size, mode='arcface128')
         dst_kps = np.squeeze(dst_kps)
+    else:
+        dst_kps = target_kps
 
     img_np = ref_img.permute(1, 2, 0).detach().cpu().numpy()
     if img_np.dtype != np.uint8:

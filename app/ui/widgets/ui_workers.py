@@ -161,6 +161,8 @@ class InputFacesLoaderWorker(qtc.QThread):
             models_processor.models[recognition_model] = models_processor.load_model(recognition_model)
             loaded_count += 1
             print(f"[Startup] InputFacesLoaderWorker: loaded {recognition_model} in {time.time() - t1:.2f}s")
+        else:
+            print(f"[Startup] InputFacesLoaderWorker: {recognition_model} already loaded")
         # Остальные модели загружаются по требованию (lazy loading)
         if loaded_count > 0:
             print(f"[Startup] InputFacesLoaderWorker: loaded {loaded_count} recognition model(s) in {time.time() - t0:.2f}s")

@@ -41,6 +41,7 @@ PATH_UI_FINISH = f"{ASSETS_UI_DIR}/finish.png"
 PATH_UI_WELCOME = f"{ASSETS_UI_DIR}/not_museum.png"
 PATH_UI_IMPOSSIBLE = f"{ASSETS_UI_DIR}/impossible.png"
 PATH_UI_DEATH = f"{ASSETS_UI_DIR}/death.png"
+PATH_UI_BORDER_FRAME = f"{ASSETS_UI_DIR}/border_frame.png"
 
 # Overlay image paths
 PATH_UI_OVERLAY_1 = f"{ASSETS_UI_DIR}/overlay/1.png"
@@ -172,8 +173,11 @@ class ARSmokingWindow(main_ui.MainWindow):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         was_processing = getattr(self, "video_processor", None) and self.video_processor.processing
         super().resizeEvent(event)
+        if hasattr(self, "overlayLayer") and self.overlayLayer:
+            self.overlayLayer.setGeometry(self.rect())
         self._position_uporotsya_button()
         self._position_impossible_label()
+        self._position_border_frame()
         if self.deathOverlay.isVisible():
             self.deathOverlay.setGeometry(self.rect())
             self._refresh_death_overlay_graphics()
@@ -261,7 +265,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._welcome_duration_ms: int = 45_000
         self._welcome_active: bool = False
 
-        self.buttonUport = QtWidgets.QPushButton("", parent=self.graphicsViewFrame.viewport())
+        self.overlayLayer = QtWidgets.QWidget(self)
+        # Оставляем слой интерактивным, чтобы дочерние кнопки продолжали получать события мыши
+        self.overlayLayer.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.overlayLayer.setStyleSheet("background-color: transparent;")
+        self.overlayLayer.setGeometry(self.rect())
+        self.overlayLayer.raise_()
+
+        self.buttonUport = QtWidgets.QPushButton("", parent=self.overlayLayer)
         self.buttonUport.setObjectName("buttonUport")
         self.buttonUport.setCheckable(True)
         self.buttonUport.setEnabled(False)
@@ -285,12 +296,22 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.graphicsViewFrame.viewport().installEventFilter(self)
 
         self._impossible_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_IMPOSSIBLE))
-        self.messageLabel = QtWidgets.QLabel("", parent=self.graphicsViewFrame.viewport())
+        self.messageLabel = QtWidgets.QLabel("", parent=self.overlayLayer)
         self.messageLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.messageLabel.setWordWrap(False)
         self.messageLabel.setStyleSheet("background-color: transparent; border: none;")
         self.messageLabel.hide()
         self.messageLabel.setObjectName("messageLabel")
+
+        # Border frame - отображается поверх видео, но под кнопками и надписями
+        self.borderFrameLabel = QtWidgets.QLabel(self.overlayLayer)
+        self.borderFrameLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.borderFrameLabel.setStyleSheet("background-color: transparent; border: none;")
+        self.borderFrameLabel.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        border_frame_pixmap = QtGui.QPixmap(self._resource_path(PATH_UI_BORDER_FRAME))
+        if not border_frame_pixmap.isNull():
+            self.borderFrameLabel.setPixmap(border_frame_pixmap)
+        self.borderFrameLabel.hide()
 
         self.deathOverlay = QtWidgets.QWidget(self)
         self.deathOverlay.setStyleSheet("background-color: #000000;")
@@ -1034,6 +1055,13 @@ class ARSmokingWindow(main_ui.MainWindow):
         if width <= 0 or height <= 0:
             return
 
+        viewport_pos = viewport.mapTo(self, QtCore.QPoint(0, 0))
+        vx = viewport_pos.x()
+        vy = viewport_pos.y()
+
+        # Получаем ширину рамки, если она видима
+        border_frame_width = self._get_border_frame_width()
+        
         frame_width, frame_height = getattr(self, "_display_frame_size", (width, height))
         frame_width = max(1, frame_width)
         frame_height = max(1, frame_height)
@@ -1043,6 +1071,11 @@ class ARSmokingWindow(main_ui.MainWindow):
             aspect_ratio = width / height if height else 1.0
         display_width = min(width, int(height * aspect_ratio))
         display_width = max(1, display_width)
+        
+        # Если рамка видима, используем её ширину как максимальную ширину кнопки
+        if border_frame_width is not None and border_frame_width > 0:
+            max_button_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
+            display_width = min(display_width, max_button_width)
 
         self._refresh_button_size()
         button_width = self.buttonUport.width()
@@ -1050,9 +1083,15 @@ class ARSmokingWindow(main_ui.MainWindow):
         if button_width <= 0 or button_height <= 0:
             button_width = max(200, int(display_width * 0.9))
             button_height = 48
-        pos_x = max(0, (width - button_width) // 2)
-        pos_y = max(0, height - button_height - 24)
+        
+        # Ограничиваем ширину кнопки шириной рамки, если рамка видима
+        if border_frame_width is not None and border_frame_width > 0:
+            button_width = min(button_width, int(border_frame_width * 0.9))
+        
+        pos_x = vx + max(0, (width - button_width) // 2)
+        pos_y = vy + max(0, height - button_height - 24)
         self.buttonUport.setGeometry(pos_x, pos_y, button_width, button_height)
+        # Кнопка всегда должна быть поверх рамки
         self.buttonUport.raise_()
 
     def _compute_available_button_width(self) -> int:
@@ -1072,6 +1111,14 @@ class ARSmokingWindow(main_ui.MainWindow):
             aspect_ratio = width / height if height else 1.0
         display_width = min(width, int(height * aspect_ratio))
         display_width = max(1, display_width)
+        
+        # Получаем ширину рамки, если она видима
+        border_frame_width = self._get_border_frame_width()
+        if border_frame_width is not None and border_frame_width > 0:
+            # Используем ширину рамки как максимальную ширину
+            max_button_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
+            display_width = min(display_width, max_button_width)
+        
         margin = 40
         return max(1, min(display_width - margin, width - margin))
 
@@ -1140,6 +1187,13 @@ class ARSmokingWindow(main_ui.MainWindow):
         if width <= 0 or height <= 0:
             return
 
+        viewport_pos = viewport.mapTo(self, QtCore.QPoint(0, 0))
+        vx = viewport_pos.x()
+        vy = viewport_pos.y()
+
+        # Получаем ширину рамки, если она видима
+        border_frame_width = self._get_border_frame_width()
+
         frame_width, frame_height = getattr(self, "_display_frame_size", (width, height))
         frame_width = max(1, frame_width)
         frame_height = max(1, frame_height)
@@ -1158,12 +1212,84 @@ class ARSmokingWindow(main_ui.MainWindow):
             label_width = self.messageLabel.sizeHint().width()
             label_height = self.messageLabel.sizeHint().height()
         
+        # Если рамка видима, ограничиваем ширину надписи шириной рамки
+        if border_frame_width is not None and border_frame_width > 0:
+            max_label_width = int(border_frame_width * 0.9)  # 90% от ширины рамки
+            label_width = min(label_width, max_label_width)
+            # Если это pixmap, нужно перемасштабировать
+            if self.messageLabel.pixmap() and not self.messageLabel.pixmap().isNull():
+                original_pixmap = self.messageLabel.pixmap()
+                if original_pixmap.width() > max_label_width:
+                    scale_factor = max_label_width / original_pixmap.width()
+                    scaled_pixmap = original_pixmap.scaled(
+                        max_label_width,
+                        int(original_pixmap.height() * scale_factor),
+                        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                        QtCore.Qt.TransformationMode.SmoothTransformation,
+                    )
+                    self.messageLabel.setPixmap(scaled_pixmap)
+                    label_width = scaled_pixmap.width()
+                    label_height = scaled_pixmap.height()
+        
         # Используем ту же логику позиционирования, что и для кнопки
-        pos_x = max(0, (width - label_width) // 2)
-        pos_y = max(0, height - label_height - 24)
+        pos_x = vx + max(0, (width - label_width) // 2)
+        pos_y = vy + max(0, height - label_height - 24)
         
         self.messageLabel.setGeometry(pos_x, pos_y, label_width, label_height)
+        # Надпись всегда должна быть поверх рамки
         self.messageLabel.raise_()
+
+    def _get_border_frame_width(self) -> Optional[int]:
+        """Возвращает ширину рамки, если она видима, иначе None."""
+        if not hasattr(self, "borderFrameLabel") or self.borderFrameLabel is None:
+            return None
+        if not self.borderFrameLabel.isVisible():
+            return None
+        return self.borderFrameLabel.width()
+    
+    def _position_border_frame(self) -> None:
+        """Позиционирует рамку поверх видеопотока, по центру, с теми же пропорциями, что и welcome/death экраны."""
+        if not hasattr(self, "borderFrameLabel") or self.borderFrameLabel is None:
+            return
+        
+        # Используем ту же логику позиционирования, что и для welcome/death экранов
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
+            return
+        
+        # Пропорции 9:16 (как у welcome/death экранов)
+        frame_height = height
+        frame_width = int(frame_height * 9 / 16)
+        if frame_width > width:
+            frame_width = width
+            frame_height = int(frame_width * 16 / 9)
+        
+        # Центрируем
+        offset_x = (width - frame_width) // 2
+        offset_y = (height - frame_height) // 2
+        
+        # Масштабируем изображение рамки
+        if self.borderFrameLabel.pixmap() and not self.borderFrameLabel.pixmap().isNull():
+            pixmap = self.borderFrameLabel.pixmap()
+            scaled = pixmap.scaled(
+                frame_width,
+                frame_height,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            self.borderFrameLabel.setPixmap(scaled)
+            self.borderFrameLabel.setFixedSize(scaled.size())
+            self.borderFrameLabel.move(
+                offset_x + (frame_width - scaled.width()) // 2,
+                offset_y + (frame_height - scaled.height()) // 2,
+            )
+        else:
+            self.borderFrameLabel.setFixedSize(frame_width, frame_height)
+            self.borderFrameLabel.move(offset_x, offset_y)
+        
+        # Держим рамку ниже остальных элементов
+        self.borderFrameLabel.lower()
 
     def _update_media_toggle_button(self) -> None:
         if not self.mediaToggleButton:
@@ -1185,6 +1311,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         if obj == self.graphicsViewFrame.viewport() and event.type() == QtCore.QEvent.Resize:
             QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
             QtCore.QTimer.singleShot(0, self._position_impossible_label)
+            QtCore.QTimer.singleShot(0, self._position_border_frame)
             QtCore.QTimer.singleShot(0, self._position_config_button)
             QtCore.QTimer.singleShot(0, self._refresh_welcome_overlay_graphics)
         if obj == getattr(self, "welcomeOverlay", None) and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick):
@@ -1329,7 +1456,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._fade_timer.deleteLater()
         
         self._fade_timer = QtCore.QTimer(self)
-        interval_ms = 50  # Обновляем каждые 50ms для плавной анимации
+        interval_ms = 16  # Обновляем каждые 16ms (~60 FPS) для более быстрой и плавной анимации
         total = float(max(1, duration_ms))
         
         # Вычисляем шаг для fade-анимации
@@ -1372,7 +1499,8 @@ class ARSmokingWindow(main_ui.MainWindow):
                 QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
                 # Показываем кнопку
                 self.buttonUport.show()
-                self.buttonUport.raise_()  # Поднимаем кнопку на передний план
+                # Кнопка всегда должна быть поверх рамки
+                self.buttonUport.raise_()
     
     def _on_stage2_complete(self) -> None:
         """Вызывается после завершения второго этапа - показываем "НЕВОЗМОЖНО" и запускаем stage3"""
@@ -1422,7 +1550,19 @@ class ARSmokingWindow(main_ui.MainWindow):
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.hide()
         if self._impossible_pixmap and not self._impossible_pixmap.isNull():
-            scaled_pixmap = self._scaled_button_pixmap(self._impossible_pixmap)
+            # Получаем ширину рамки для ограничения размера надписи
+            border_frame_width = self._get_border_frame_width()
+            if border_frame_width is not None and border_frame_width > 0:
+                # Ограничиваем ширину надписи 90% от ширины рамки
+                max_label_width = int(border_frame_width * 0.9)
+                scaled_pixmap = self._impossible_pixmap.scaled(
+                    max_label_width,
+                    int(self._impossible_pixmap.height() * (max_label_width / self._impossible_pixmap.width())),
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+            else:
+                scaled_pixmap = self._scaled_button_pixmap(self._impossible_pixmap)
             self.messageLabel.setPixmap(scaled_pixmap)
             self.messageLabel.setFixedSize(scaled_pixmap.size())
             self.messageLabel.setText("")
@@ -1430,6 +1570,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.messageLabel.setText("НЕВОЗМОЖНО")
         self.messageLabel.show()
         self._position_impossible_label()
+        # Надпись всегда должна быть поверх рамки
         self.messageLabel.raise_()
         # Экран смерти появится после завершения анимации stage2
         if self.mediaToggleButton:
@@ -1457,6 +1598,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.configButton.hide()
         if self.mediaToggleButton:
             self.mediaToggleButton.hide()
+        # Скрываем рамку, когда показывается death overlay
+        if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
+            self.borderFrameLabel.hide()
 
     def _restart_scenario(self) -> None:
         """Перезапускает сценарий после экрана смерти.
@@ -1529,6 +1673,10 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.buttonUport.show()
             self._position_uporotsya_button()
             self._try_enable_uporotsya()
+            # Показываем рамку после скрытия death overlay
+            if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
+                self._position_border_frame()
+                self.borderFrameLabel.show()
         
         QtCore.QTimer.singleShot(200, show_uporotsya_button)
         
@@ -1653,6 +1801,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         self.welcomeOverlay.show()
         self.welcomeOverlay.raise_()
         self._start_overlay_animation()
+        # Скрываем рамку, когда показывается welcome overlay
+        if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
+            self.borderFrameLabel.hide()
 
         if self._welcome_timer:
             self._welcome_timer.stop()
@@ -1895,6 +2046,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._stop_overlay_animation()
         self._initialize_post_welcome_state()
         self._try_enable_uporotsya()
+        # Показываем рамку после скрытия welcome overlay
+        if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
+            self._position_border_frame()
+            self.borderFrameLabel.show()
 
     def _initialize_post_welcome_state(self) -> None:
         if self.welcomeOverlay:
@@ -1911,6 +2066,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         QtCore.QTimer.singleShot(0, self._position_uporotsya_button)
         QtCore.QTimer.singleShot(0, self._ensure_playing)
         QtCore.QTimer.singleShot(0, lambda: layout_actions.fit_image_to_view_onchange(self))
+        # Показываем рамку после скрытия welcome overlay
+        if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
+            QtCore.QTimer.singleShot(0, self._position_border_frame)
+            self.borderFrameLabel.show()
 
     def _open_control_options_window(self) -> None:
         if not self._ensure_control_panel_widget():

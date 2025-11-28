@@ -27,20 +27,20 @@
   "zombie_overlay": {
     "stage1": {
       "color_start": 0.0,
-      "color_end": 0.0,
+      "color_end": 0.2,
       "texture_start": 0.0,
-      "texture_end": 0.0
+      "texture_end": 0.2
     },
     "stage2": {
-      "color_start": 0.0,
-      "color_end": 0.8,
-      "texture_start": 0.0,
-      "texture_end": 0.8
+      "color_start": 0.2,
+      "color_end": 1.0,
+      "texture_start": 0.2,
+      "texture_end": 1.0
     },
     "stage3": {
-      "color_start": 0.8,
+      "color_start": 1.0,
       "color_end": 1.0,
-      "texture_start": 0.8,
+      "texture_start": 1.0,
       "texture_end": 1.0
     }
   },
