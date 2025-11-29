@@ -2698,6 +2698,13 @@ class ARSmokingWindow(main_ui.MainWindow):
         """Обработка горячих клавиш. Переопределяет метод из MainWindow."""
         key = event.key()
         
+        # Esc - выход из полноэкранного режима в maximized режим
+        if key == QtCore.Qt.Key_Escape:
+            if self.is_full_screen:
+                from app.ui.widgets.actions import video_control_actions
+                video_control_actions.view_fullscreen(self)
+                return
+        
         # F11 - переключение полноэкранного режима
         if key == QtCore.Qt.Key_F11:
             from app.ui.widgets.actions import video_control_actions

@@ -200,7 +200,8 @@ def delete_all_markers(main_window: 'MainWindow'):
 def view_fullscreen(main_window: 'MainWindow'):
 
     if main_window.is_full_screen:
-        main_window.showNormal()  # Exit full-screen mode
+        # Выходим из полноэкранного режима в обычный размер окна
+        main_window.showNormal()
         main_window.menuBar().show()
     else:
         main_window.showFullScreen()  # Enter full-screen mode

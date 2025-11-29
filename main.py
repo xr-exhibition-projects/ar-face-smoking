@@ -97,6 +97,8 @@ def main() -> None:
     window.show()
     # Запускаем приложение сразу в полноэкранном режиме
     window.showFullScreen()
+    # Устанавливаем флаг полноэкранного режима, чтобы F11 работал правильно
+    window.is_full_screen = True
     app.exec()
 
 
