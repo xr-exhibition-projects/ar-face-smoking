@@ -2,7 +2,9 @@
 Utility to pre-build TensorRT engines for LivePortrait models.
 
 Run from the project root:
-    conda activate env50  # или другая среда
+    # Название окружения можно задать через переменную окружения VISO_CONDA_ENV
+    # Если переменная не задана, используйте ваше название окружения
+    conda activate %VISO_CONDA_ENV%  # или conda activate visomaster
     python scripts/build_trt_engines.py
 """
 

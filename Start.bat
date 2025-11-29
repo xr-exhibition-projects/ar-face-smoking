@@ -1,5 +1,23 @@
 
-call conda activate env50
+REM Название conda окружения можно задать несколькими способами:
+REM 1. Через переменную окружения VISO_CONDA_ENV
+REM 2. Через файл conda_env.txt в корне проекта (первая строка)
+REM 3. Если ничего не задано, используется значение по умолчанию "visomaster"
+
+if "%VISO_CONDA_ENV%"=="" (
+    REM Пробуем прочитать из файла conda_env.txt
+    if exist "conda_env.txt" (
+        for /f "tokens=*" %%a in (conda_env.txt) do (
+            set VISO_CONDA_ENV=%%a
+            goto :found_env
+        )
+    )
+    REM Если файл не найден, используем значение по умолчанию
+    set VISO_CONDA_ENV=visomaster
+)
+:found_env
+echo Используется conda окружение: %VISO_CONDA_ENV%
+call conda activate %VISO_CONDA_ENV%
 REM Оптимизация: проверяем, нужно ли конвертировать UI файлы
 REM Конвертируем только если UI файл новее сгенерированного Python файла
 if not exist "app\ui\core\main_window.py" (

@@ -25,10 +25,24 @@ def _prepare_environment() -> None:
     base_path = _resolve_base_path()
     os.chdir(base_path)
 
+    # Добавляем пути для поиска DLL файлов
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    
+    # При frozen приложении (PyInstaller) библиотеки находятся в _internal
+    if getattr(sys, "frozen", False):
+        internal_dir = base_path / "_internal"
+        if internal_dir.exists():
+            os.environ["PATH"] = str(internal_dir) + os.pathsep + os.environ.get("PATH", "")
+            if callable(add_dll_directory):
+                try:
+                    add_dll_directory(str(internal_dir))
+                except OSError:
+                    pass
+    
+    # Также добавляем dependencies, если он существует (для портативной версии)
     dependencies_dir = base_path / "dependencies"
     if dependencies_dir.exists():
         os.environ["PATH"] = str(dependencies_dir) + os.pathsep + os.environ.get("PATH", "")
-        add_dll_directory = getattr(os, "add_dll_directory", None)
         if callable(add_dll_directory):
             try:
                 add_dll_directory(str(dependencies_dir))

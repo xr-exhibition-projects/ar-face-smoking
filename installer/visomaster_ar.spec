@@ -29,8 +29,22 @@ datas += [
     (str(project_root / "README.md"), "."),
 ]
 
+# Добавляем DLL файлы TensorRT в binaries, чтобы PyInstaller разместил их в _internal
+# где Python сможет их найти при импорте
 binaries = []
-# DLL файлы TensorRT будут скопированы в корень сборки скриптом build_dist.py
+tensorrt_dlls = [
+    ('dependencies/nvinfer_10.dll', '.'),
+    ('dependencies/nvinfer_builder_resource_10.dll', '.'),
+    ('dependencies/nvinfer_plugin_10.dll', '.'),
+    ('dependencies/nvonnxparser_10.dll', '.'),
+]
+# Проверяем существование файлов перед добавлением
+for dll_path, dest_dir in tensorrt_dlls:
+    full_path = project_root / dll_path
+    if full_path.exists():
+        binaries.append((str(full_path), dest_dir))
+    else:
+        print(f"Warning: TensorRT DLL not found: {full_path}")
 
 hiddenimports = set()
 # Добавляем основные модули
@@ -39,6 +53,9 @@ hiddenimports.add("shiboken6")
 hiddenimports.add("qdarktheme")
 
 # Собираем подмодули для основных библиотек
+# ВНИМАНИЕ: collect_submodules может быть медленным для больших библиотек
+# Если сборка всё ещё медленная, можно закомментировать эти строки
+# и полагаться на автоматическое обнаружение PyInstaller
 for module_name in ("onnxruntime", "skimage", "torchvision"):
     try:
         hiddenimports.update(collect_submodules(module_name))
@@ -49,6 +66,7 @@ for module_name in ("onnxruntime", "skimage", "torchvision"):
 try:
     import PySide6
     # Добавляем все подмодули PySide6
+    # ВНИМАНИЕ: это может быть медленно, но необходимо для корректной работы
     hiddenimports.update(collect_submodules("PySide6"))
 except (ModuleNotFoundError, ImportError):
     # Если PySide6 не найден, добавляем базовые модули
@@ -100,7 +118,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,  # Отключено для ускорения сборки (UPX очень медленный на больших проектах)
     upx_exclude=[],
     name="ARFaceEffect",
 )
