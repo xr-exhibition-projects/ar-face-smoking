@@ -95,6 +95,8 @@ def main() -> None:
 
     window = ar_smoking_ui.ARSmokingWindow() #main_ui.MainWindow()
     window.show()
+    # Запускаем приложение сразу в полноэкранном режиме
+    window.showFullScreen()
     app.exec()
 
 

@@ -131,6 +131,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._death_delay_timer: Optional[QtCore.QTimer] = None
         self._death_auto_return_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome через 30 сек
         self._sles_auto_return_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome, если не нажали "Слезть"
+        self._welcome_uporotsya_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome, если не нажали "УПОРОТЬСЯ"
         
         # Cached UI sizes to keep controls stable between restarts
         self._button_size_dirty: bool = True
@@ -557,7 +558,7 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         self.configButton = QtWidgets.QPushButton("⚙", self)
         self.configButton.setFixedSize(42, 42)
-        self.configButton.setToolTip("Настройки (Ctrl+Alt+Shift+D)")
+        self.configButton.setToolTip("Настройки (Ctrl+Alt+D)")
         self.configButton.setStyleSheet(
             """
             QPushButton {
@@ -573,7 +574,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             """
         )
         self.configButton.clicked.connect(self._open_control_options_window)
-        # Скрываем кнопку настроек - используем горячую клавишу Ctrl+Alt+Shift+D
+        # Скрываем кнопку настроек - используем горячую клавишу Ctrl+Alt+D
         self.configButton.hide()
 
         self.mediaToggleButton = QtWidgets.QPushButton(self)
@@ -1052,6 +1053,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             return
 
         if checked:
+            # Отменяем таймер автоматического возврата (пользователь нажал "УПОРОТЬСЯ")
+            self._cancel_welcome_uporotsya_timer()
             if not self.target_faces:
                 card_actions.find_target_faces(self)
                 if not self.target_faces:
@@ -1731,7 +1734,8 @@ class ARSmokingWindow(main_ui.MainWindow):
             return True
         if obj == getattr(self, "deathOverlay", None) and event.type() == QtCore.QEvent.MouseButtonRelease:
             if self.deathOverlay.isVisible():
-                self._restart_scenario()
+                # При клике на экран "Смерть неизбежна" возвращаемся на стартовый экран "НЕМУЗЕЙ"
+                self._restart_scenario(force_welcome=True)
             return True
         return super().eventFilter(obj, event)
 
@@ -1942,6 +1946,68 @@ class ARSmokingWindow(main_ui.MainWindow):
                 pass
             # Возвращаемся на welcome экран
             self._restart_scenario(force_welcome=True)
+    
+    def _cancel_welcome_uporotsya_timer(self) -> None:
+        """Отменяет таймер автоматического возврата на welcome экран для кнопки 'УПОРОТЬСЯ'."""
+        if self._welcome_uporotsya_timer:
+            self._welcome_uporotsya_timer.stop()
+            self._welcome_uporotsya_timer.deleteLater()
+            self._welcome_uporotsya_timer = None
+    
+    def _start_welcome_uporotsya_timer(self) -> None:
+        """Запускает таймер для автоматического возврата на welcome экран,
+        если пользователь не нажал на кнопку 'УПОРОТЬСЯ'.
+        Длительность таймера читается из animation_config.json (welcome_uporotsya_timeout_ms)."""
+        # Отменяем предыдущий таймер, если он был запущен
+        self._cancel_welcome_uporotsya_timer()
+        
+        # Читаем длительность из конфига (по умолчанию 45 секунд = 45000 мс)
+        timings = self._animation_config.get("timings", {})
+        timeout_duration_ms = timings.get("welcome_uporotsya_timeout_ms", 45000)
+        
+        print(f"[Timer] Запуск таймера welcome_uporotsya: {timeout_duration_ms} мс")
+        
+        # Создаем новый таймер
+        self._welcome_uporotsya_timer = QtCore.QTimer(self)
+        self._welcome_uporotsya_timer.setSingleShot(True)
+        self._welcome_uporotsya_timer.timeout.connect(self._on_welcome_uporotsya_timeout)
+        self._welcome_uporotsya_timer.start(timeout_duration_ms)
+    
+    def _on_welcome_uporotsya_timeout(self) -> None:
+        """Вызывается по истечении времени, заданного в конфиге (welcome_uporotsya_timeout_ms).
+        Автоматически возвращает на welcome экран (НЕМУЗЕЙ), если пользователь не нажал 'УПОРОТЬСЯ'."""
+        print(f"[Timer] Таймер welcome_uporotsya истек! _welcome_active={self._welcome_active}")
+        # Проверяем, что welcome экран НЕ активен (т.е. мы на экране с видеопотоком)
+        # и кнопка "УПОРОТЬСЯ" видна (т.е. пользователь еще не нажал на нее)
+        button_visible = hasattr(self, "buttonUport") and self.buttonUport and self.buttonUport.isVisible()
+        if not self._welcome_active and button_visible:
+            print("[Timer] Выполняем возврат на welcome экран (пользователь не нажал УПОРОТЬСЯ)")
+            # Останавливаем обработку видео, если она запущена
+            try:
+                self.video_processor.stop_processing()
+            except Exception:
+                pass
+            
+            # Сбрасываем состояние кнопки
+            if hasattr(self, "buttonUport") and self.buttonUport:
+                self.buttonUport.hide()
+                self._update_uporotsya_button_icon(start=True)
+                self.buttonUport.setCheckable(True)
+                self.buttonUport.setChecked(False)
+            
+            # Сбрасываем состояние
+            self.swapfacesButton.setChecked(False)
+            self._swap_active = False
+            self._second_press_triggered = False
+            self._current_stage = 0
+            
+            # Перезапускаем welcome экран (просто скрываем и показываем заново)
+            self._welcome_active = False
+            if self.welcomeOverlay:
+                self.welcomeOverlay.hide()
+            self._stop_overlay_animation()
+            # Показываем welcome экран заново
+            self._show_welcome_overlay()
     
     def _start_fade_timer(self, target_intensity: float, duration_ms: int) -> None:
         """Запускает fade-анимацию для плавного проявления эффекта старения."""
@@ -2313,9 +2379,17 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._refresh_welcome_overlay_graphics()
 
     def _show_welcome_overlay(self) -> None:
-        if self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
+        # Если welcome уже активен, просто обновляем графику
+        if self._welcome_active:
+            if self.welcomeOverlay and self.welcomeLabel:
+                self.welcomeOverlay.setGeometry(self.rect())
+                self._refresh_welcome_overlay_graphics()
+            return
+        
+        if not self.welcomeOverlay or not self.welcomeLabel:
             return
 
+        print("[Welcome] Показываем welcome overlay")
         self._welcome_active = True
         self.welcomeOverlay.setGeometry(self.rect())
         # Если изображения еще не загружены, загружаем их синхронно
@@ -2329,8 +2403,6 @@ class ARSmokingWindow(main_ui.MainWindow):
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self.borderFrameLabel.hide()
             self._update_viewport_mask(clear=True)
-
-        # Таймер убран - камера запускается только по клику на welcome экран
 
     def _refresh_welcome_overlay_graphics(self) -> None:
         if not self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
@@ -2555,6 +2627,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         if not self._welcome_active:
             return
         self._welcome_active = False
+        # Отменяем таймер автоматического возврата (пользователь кликнул на welcome экран)
+        self._cancel_welcome_uporotsya_timer()
         if self._welcome_timer:
             self._welcome_timer.stop()
             self._welcome_timer.deleteLater()
@@ -2570,6 +2644,9 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._update_viewport_mask()
         # Активируем кнопку "Упороться" с небольшой задержкой, чтобы дать время инициализироваться
         QtCore.QTimer.singleShot(100, self._try_enable_uporotsya)
+        # Запускаем таймер для автоматического возврата на welcome экран, если пользователь не нажмет "УПОРОТЬСЯ"
+        # Таймер запускается после того, как показан видеопоток и кнопка "УПОРОТЬСЯ"
+        QtCore.QTimer.singleShot(200, self._start_welcome_uporotsya_timer)
 
     def _initialize_post_welcome_state(self) -> None:
         if self.welcomeOverlay:
@@ -2627,14 +2704,13 @@ class ARSmokingWindow(main_ui.MainWindow):
             video_control_actions.view_fullscreen(self)
             return
         
-        # Проверяем комбинацию Ctrl+Alt+Shift+D для открытия ControlPanel
+        # Проверяем комбинацию Ctrl+Alt+D для открытия ControlPanel
         # Работает независимо от раскладки клавиатуры
         modifiers = event.modifiers()
         has_ctrl = modifiers & QtCore.Qt.KeyboardModifier.ControlModifier
         has_alt = modifiers & QtCore.Qt.KeyboardModifier.AltModifier
-        has_shift = modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier
         
-        if has_ctrl and has_alt and has_shift:
+        if has_ctrl and has_alt:
             # Получаем физический код клавиши (nativeVirtualKey для Windows)
             # Это позволяет работать независимо от раскладки
             native_key = event.nativeVirtualKey() if hasattr(event, 'nativeVirtualKey') else None
