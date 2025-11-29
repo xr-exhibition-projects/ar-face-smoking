@@ -129,6 +129,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._animation_config = self._load_animation_config()
         self._animation_stages = self._animation_config.get("animation_stages", {})
         self._death_delay_timer: Optional[QtCore.QTimer] = None
+        self._death_auto_return_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome через 30 сек
         
         # Cached UI sizes to keep controls stable between restarts
         self._button_size_dirty: bool = True
@@ -1857,6 +1858,37 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._death_delay_timer.deleteLater()
             self._death_delay_timer = None
     
+    def _cancel_death_auto_return_timer(self) -> None:
+        """Отменяет таймер автоматического возврата на welcome экран."""
+        if self._death_auto_return_timer:
+            self._death_auto_return_timer.stop()
+            self._death_auto_return_timer.deleteLater()
+            self._death_auto_return_timer = None
+    
+    def _start_death_auto_return_timer(self) -> None:
+        """Запускает таймер для автоматического возврата на welcome экран,
+        если пользователь не кликнул на экран смерти.
+        Длительность таймера читается из animation_config.json (death_auto_return_ms)."""
+        # Отменяем предыдущий таймер, если он был запущен
+        self._cancel_death_auto_return_timer()
+        
+        # Читаем длительность из конфига (по умолчанию 30 секунд = 30000 мс)
+        timings = self._animation_config.get("timings", {})
+        auto_return_duration_ms = timings.get("death_auto_return_ms", 30000)
+        
+        # Создаем новый таймер
+        self._death_auto_return_timer = QtCore.QTimer(self)
+        self._death_auto_return_timer.setSingleShot(True)
+        self._death_auto_return_timer.timeout.connect(self._on_death_auto_return_timeout)
+        self._death_auto_return_timer.start(auto_return_duration_ms)
+    
+    def _on_death_auto_return_timeout(self) -> None:
+        """Вызывается по истечении времени, заданного в конфиге (death_auto_return_ms).
+        Автоматически возвращает на welcome экран (НЕМУЗЕЙ)."""
+        if self.deathOverlay.isVisible():
+            # Автоматически перезапускаем сценарий, что приведет к показу welcome экрана
+            self._restart_scenario()
+    
     def _start_fade_timer(self, target_intensity: float, duration_ms: int) -> None:
         """Запускает fade-анимацию для плавного проявления эффекта старения."""
         if self._fade_timer:
@@ -2002,10 +2034,16 @@ class ARSmokingWindow(main_ui.MainWindow):
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self.borderFrameLabel.hide()
             self._update_viewport_mask(clear=True)
+        
+        # Запускаем таймер для автоматического возврата на welcome экран через 30 секунд
+        self._start_death_auto_return_timer()
 
     def _restart_scenario(self) -> None:
         """Перезапускает сценарий после экрана смерти.
         Видео/камера запускается заново, faceswap не выгружается, но не применяется до нажатия на 'упороться'."""
+        # Отменяем таймер автоматического возврата (пользователь кликнул вручную)
+        self._cancel_death_auto_return_timer()
+        
         # Останавливаем death анимацию
         self._stop_death_animation()
         
