@@ -130,6 +130,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         self._animation_stages = self._animation_config.get("animation_stages", {})
         self._death_delay_timer: Optional[QtCore.QTimer] = None
         self._death_auto_return_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome через 30 сек
+        self._sles_auto_return_timer: Optional[QtCore.QTimer] = None  # Таймер для автоматического возврата на welcome, если не нажали "Слезть"
         
         # Cached UI sizes to keep controls stable between restarts
         self._button_size_dirty: bool = True
@@ -1100,6 +1101,9 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self._current_stage != 1:
             return
 
+        # Отменяем таймер автоматического возврата (пользователь нажал "Слезть")
+        self._cancel_sles_auto_return_timer()
+
         # Переход ко второму этапу
         self._second_press_triggered = True
         # НЕ меняем _current_stage здесь - он уже установлен в _start_stage2_animation
@@ -1113,6 +1117,8 @@ class ARSmokingWindow(main_ui.MainWindow):
     def _reset_swap_state(self) -> None:
         self._swap_active = False
         self._second_press_triggered = False
+        # Отменяем таймер "Слезть" при сбросе состояния
+        self._cancel_sles_auto_return_timer()
         if hasattr(self, "buttonUport") and self.buttonUport:
             self.buttonUport.setEnabled(False)
             self.buttonUport.setCheckable(True)
@@ -1889,6 +1895,54 @@ class ARSmokingWindow(main_ui.MainWindow):
             # Автоматически возвращаемся на welcome экран (НЕМУЗЕЙ), всегда показывая welcome overlay
             self._restart_scenario(force_welcome=True)
     
+    def _cancel_sles_auto_return_timer(self) -> None:
+        """Отменяет таймер автоматического возврата на welcome экран для кнопки 'Слезть'."""
+        if self._sles_auto_return_timer:
+            self._sles_auto_return_timer.stop()
+            self._sles_auto_return_timer.deleteLater()
+            self._sles_auto_return_timer = None
+    
+    def _start_sles_auto_return_timer(self) -> None:
+        """Запускает таймер для автоматического возврата на welcome экран,
+        если пользователь не нажал на кнопку 'Слезть'.
+        Длительность таймера читается из animation_config.json (sles_auto_return_ms)."""
+        # Отменяем предыдущий таймер, если он был запущен
+        self._cancel_sles_auto_return_timer()
+        
+        # Читаем длительность из конфига (по умолчанию 2 минуты = 120000 мс)
+        timings = self._animation_config.get("timings", {})
+        auto_return_duration_ms = timings.get("sles_auto_return_ms", 120000)
+        
+        # Создаем новый таймер
+        self._sles_auto_return_timer = QtCore.QTimer(self)
+        self._sles_auto_return_timer.setSingleShot(True)
+        self._sles_auto_return_timer.timeout.connect(self._on_sles_auto_return_timeout)
+        self._sles_auto_return_timer.start(auto_return_duration_ms)
+    
+    def _on_sles_auto_return_timeout(self) -> None:
+        """Вызывается по истечении времени, заданного в конфиге (sles_auto_return_ms).
+        Автоматически возвращает на welcome экран (НЕМУЗЕЙ), если пользователь не нажал 'Слезть'."""
+        # Проверяем, что мы все еще на этапе 1 и кнопка "Слезть" видна
+        if self._current_stage == 1 and self._button_icon_state == "finish":
+            # Останавливаем анимацию и возвращаемся на welcome экран
+            self._stop_face_fade(reset_progress=True)
+            self.swapfacesButton.setChecked(False)
+            self._swap_active = False
+            self._second_press_triggered = False
+            self._current_stage = 0  # Сбрасываем этап
+            if hasattr(self, "buttonUport") and self.buttonUport:
+                self.buttonUport.hide()
+                # Сбрасываем состояние кнопки на "Упороться"
+                self._update_uporotsya_button_icon(start=True)
+                self.buttonUport.setCheckable(True)
+                self.buttonUport.setChecked(False)
+            try:
+                self.video_processor.stop_processing()
+            except Exception:
+                pass
+            # Возвращаемся на welcome экран
+            self._restart_scenario(force_welcome=True)
+    
     def _start_fade_timer(self, target_intensity: float, duration_ms: int) -> None:
         """Запускает fade-анимацию для плавного проявления эффекта старения."""
         if self._fade_timer:
@@ -1941,6 +1995,9 @@ class ARSmokingWindow(main_ui.MainWindow):
                 self.buttonUport.show()
                 # Кнопка всегда должна быть поверх рамки
                 self.buttonUport.raise_()
+            
+            # Запускаем таймер для автоматического возврата на welcome экран, если не нажали "Слезть"
+            self._start_sles_auto_return_timer()
     
     def _on_stage2_complete(self) -> None:
         """Вызывается после завершения второго этапа - показываем "НЕВОЗМОЖНО" и запускаем stage3"""
@@ -1976,6 +2033,7 @@ class ARSmokingWindow(main_ui.MainWindow):
                 self._stage3_timer.deleteLater()
                 self._stage3_timer = None
         self._cancel_death_delay_timer()
+        self._cancel_sles_auto_return_timer()  # Отменяем таймер "Слезть" при остановке
         if reset_progress:
             # Сбрасываем на стартовую интенсивность первого этапа
             stage1_config = self._animation_stages.get("stage1", {})
@@ -2078,6 +2136,13 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # Если force_welcome=True (автоматический возврат), всегда показываем welcome экран
         if force_welcome:
+            # Сбрасываем кнопку "упороться" в начальное состояние (иконка "start")
+            self._update_uporotsya_button_icon(start=True)
+            if hasattr(self, "buttonUport") and self.buttonUport:
+                self.buttonUport.setCheckable(True)
+                self.buttonUport.setChecked(False)
+            # Сбрасываем этап
+            self._current_stage = 0
             self._show_welcome_overlay()
             return
         
@@ -2498,16 +2563,22 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.welcomeOverlay.hide()
         self._stop_overlay_animation()
         self._initialize_post_welcome_state()
-        self._try_enable_uporotsya()
         # Показываем рамку после скрытия welcome overlay
         if hasattr(self, "borderFrameLabel") and self.borderFrameLabel:
             self._position_border_frame()
             self.borderFrameLabel.show()
             self._update_viewport_mask()
+        # Активируем кнопку "Упороться" с небольшой задержкой, чтобы дать время инициализироваться
+        QtCore.QTimer.singleShot(100, self._try_enable_uporotsya)
 
     def _initialize_post_welcome_state(self) -> None:
         if self.welcomeOverlay:
             self.welcomeOverlay.hide()
+        # Убеждаемся, что кнопка в правильном состоянии
+        if hasattr(self, "buttonUport") and self.buttonUport:
+            self.buttonUport.setCheckable(True)
+            self.buttonUport.setChecked(False)
+            self._update_uporotsya_button_icon(start=True)
         self.buttonUport.show()
         # Кнопка настроек скрыта - используем горячую клавишу Ctrl+Alt+Shift+D
         # self.configButton.show()
