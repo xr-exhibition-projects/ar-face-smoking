@@ -1886,8 +1886,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         """Вызывается по истечении времени, заданного в конфиге (death_auto_return_ms).
         Автоматически возвращает на welcome экран (НЕМУЗЕЙ)."""
         if self.deathOverlay.isVisible():
-            # Автоматически перезапускаем сценарий, что приведет к показу welcome экрана
-            self._restart_scenario()
+            # Автоматически возвращаемся на welcome экран (НЕМУЗЕЙ), всегда показывая welcome overlay
+            self._restart_scenario(force_welcome=True)
     
     def _start_fade_timer(self, target_intensity: float, duration_ms: int) -> None:
         """Запускает fade-анимацию для плавного проявления эффекта старения."""
@@ -2038,10 +2038,14 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Запускаем таймер для автоматического возврата на welcome экран через 30 секунд
         self._start_death_auto_return_timer()
 
-    def _restart_scenario(self) -> None:
+    def _restart_scenario(self, force_welcome: bool = False) -> None:
         """Перезапускает сценарий после экрана смерти.
-        Видео/камера запускается заново, faceswap не выгружается, но не применяется до нажатия на 'упороться'."""
-        # Отменяем таймер автоматического возврата (пользователь кликнул вручную)
+        Видео/камера запускается заново, faceswap не выгружается, но не применяется до нажатия на 'упороться'.
+        
+        Args:
+            force_welcome: Если True, всегда показывает welcome экран, даже если есть выбранное видео/камера.
+        """
+        # Отменяем таймер автоматического возврата (пользователь кликнул вручную или таймер истек)
         self._cancel_death_auto_return_timer()
         
         # Останавливаем death анимацию
@@ -2071,6 +2075,11 @@ class ARSmokingWindow(main_ui.MainWindow):
         
         # ВАЖНО: НЕ выгружаем selected_video_button и target_faces - они остаются для повторного использования
         # НЕ очищаем target_videos, input_faces и т.д.
+        
+        # Если force_welcome=True (автоматический возврат), всегда показываем welcome экран
+        if force_welcome:
+            self._show_welcome_overlay()
+            return
         
         # Проверяем, есть ли выбранное видео/камера
         if not self.selected_video_button:
@@ -2256,14 +2265,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self.borderFrameLabel.hide()
             self._update_viewport_mask(clear=True)
 
-        if self._welcome_timer:
-            self._welcome_timer.stop()
-            self._welcome_timer.deleteLater()
-
-        self._welcome_timer = QtCore.QTimer(self)
-        self._welcome_timer.setSingleShot(True)
-        self._welcome_timer.timeout.connect(self._dismiss_welcome_overlay)
-        self._welcome_timer.start(self._welcome_duration_ms)
+        # Таймер убран - камера запускается только по клику на welcome экран
 
     def _refresh_welcome_overlay_graphics(self) -> None:
         if not self._welcome_active or not self.welcomeOverlay or not self.welcomeLabel:
