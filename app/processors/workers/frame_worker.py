@@ -41,6 +41,10 @@ class FrameWorker(threading.Thread):
 
     def run(self):
         try:
+            # Отзеркаливаем кадр по горизонтали для веб-камеры (как в зеркале)
+            if self.video_processor.file_type == 'webcam':
+                self.frame = cv2.flip(self.frame, 1)  # 1 = horizontal flip
+            
             original_frame_bgr = self.frame[..., ::-1]
             do_swap = False
             # Update parameters from markers (if exists) without concurrent access from other threads
