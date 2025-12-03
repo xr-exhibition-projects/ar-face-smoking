@@ -1055,16 +1055,49 @@ class ARSmokingWindow(main_ui.MainWindow):
         if checked:
             # Отменяем таймер автоматического возврата (пользователь нажал "УПОРОТЬСЯ")
             self._cancel_welcome_uporotsya_timer()
+            
+            # Очищаем существующие распознанные лица перед каждым новым распознаванием
+            # Это гарантирует, что эффект будет применяться к лицу из текущего кадра
+            # Сохраняем информацию о назначенном input face перед очисткой
+            saved_input_button = None
+            if self.target_faces and self.cur_selected_target_face_button:
+                # Сохраняем первый назначенный input face, если он есть
+                if self.cur_selected_target_face_button.assigned_input_faces:
+                    first_input_face_id = next(iter(self.cur_selected_target_face_button.assigned_input_faces.keys()))
+                    saved_input_button = self.input_faces.get(first_input_face_id)
+                elif self._pending_input_button:
+                    saved_input_button = self._pending_input_button
+            
+            if self.target_faces:
+                card_actions.clear_target_faces(self, refresh_frame=False)
+            
+            # Заново распознаем лицо из текущего кадра
+            card_actions.find_target_faces(self)
             if not self.target_faces:
-                card_actions.find_target_faces(self)
-                if not self.target_faces:
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        "Лицо не найдено",
-                        "Не удалось обнаружить лицо. Убедитесь, что камера направлена на лицо и попробуйте ещё раз.",
-                    )
-                    self.buttonUport.setChecked(False)
-                    return
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Лицо не найдено",
+                    "Не удалось обнаружить лицо. Убедитесь, что камера направлена на лицо и попробуйте ещё раз.",
+                )
+                self.buttonUport.setChecked(False)
+                return
+            
+            # Восстанавливаем состояние после распознавания
+            # Выбираем первое найденное лицо (это уже делается в find_target_faces, но убеждаемся)
+            if self.target_faces and not self.selected_target_face_id:
+                list(self.target_faces.values())[0].click()
+            
+            # Восстанавливаем назначение input face, если оно было
+            # Используем небольшую задержку, чтобы убедиться, что cur_selected_target_face_button установлен
+            if saved_input_button:
+                def restore_input_face():
+                    if self.cur_selected_target_face_button:
+                        self._pending_input_button = saved_input_button
+                        self._assign_input_face(saved_input_button)
+                QtCore.QTimer.singleShot(0, restore_input_face)
+            
+            self._target_ready = True
+            self._try_enable_uporotsya()
             
             self._current_stage = 1
             self._start_stage1_animation()
