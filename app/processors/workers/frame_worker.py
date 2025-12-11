@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 import threading
 from math import floor, ceil
 import time
+import queue
 
 import torch
 import cv2
@@ -43,6 +44,18 @@ class FrameWorker(threading.Thread):
 
     def run(self):
         try:
+            # Проверяем флаг processing в начале - если обработка остановлена, сразу выходим
+            if not self.video_processor.processing:
+                logger = get_memory_logger()
+                logger.info(f"[FrameWorker] Frame {self.frame_number} cancelled - processing stopped before start")
+                # Все равно нужно отметить задачу как выполненную, чтобы не заблокировать очередь
+                try:
+                    self.video_processor.frame_queue.get_nowait()
+                    self.video_processor.frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                return
+            
             # Отзеркаливаем кадр по горизонтали для веб-камеры (как в зеркале)
             if self.video_processor.file_type == 'webcam':
                 self.frame = cv2.flip(self.frame, 1)  # 1 = horizontal flip
@@ -56,6 +69,17 @@ class FrameWorker(threading.Thread):
             # Check if view mask or face compare checkboxes are checked
             self.is_view_face_compare = self.main_window.faceCompareCheckBox.isChecked() 
             self.is_view_face_mask = self.main_window.faceMaskCheckBox.isChecked() 
+
+            # Проверяем флаг processing перед началом обработки кадра
+            if not self.video_processor.processing:
+                logger = get_memory_logger()
+                logger.info(f"[FrameWorker] Frame {self.frame_number} cancelled - processing stopped before frame processing")
+                try:
+                    self.video_processor.frame_queue.get_nowait()
+                    self.video_processor.frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                return
 
             # Process the frame with model inference
             # print(f"Processing frame {self.frame_number}")
@@ -91,10 +115,20 @@ class FrameWorker(threading.Thread):
                     display_frame = self.frame
             pixmap = common_widget_actions.get_pixmap_from_frame(self.main_window, display_frame)
 
+            # Проверяем флаг processing перед отправкой результата
+            if not self.video_processor.processing:
+                logger = get_memory_logger()
+                logger.info(f"[FrameWorker] Frame {self.frame_number} cancelled - processing stopped before emitting result")
+                try:
+                    self.video_processor.frame_queue.get_nowait()
+                    self.video_processor.frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                return
+            
             # Output processed Webcam frame
             if self.video_processor.file_type=='webcam' and not self.is_single_frame:
                 self.video_processor.webcam_frame_processed_signal.emit(pixmap, self.frame)
-
             #Output Video frame (while playing)
             elif not self.is_single_frame:
                 self.video_processor.frame_processed_signal.emit(self.frame_number, pixmap, self.frame)
@@ -103,6 +137,16 @@ class FrameWorker(threading.Thread):
                 # print('Emitted single_frame_processed_signal')
                 self.video_processor.single_frame_processed_signal.emit(self.frame_number, pixmap, self.frame)
 
+            # Проверяем флаг processing перед отметкой задачи как выполненной
+            if not self.video_processor.processing:
+                logger = get_memory_logger()
+                logger.info(f"[FrameWorker] Frame {self.frame_number} cancelled - processing stopped before marking done")
+                try:
+                    self.video_processor.frame_queue.get_nowait()
+                    self.video_processor.frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                return
 
             # Mark the frame as done in the queue
             self.video_processor.frame_queue.get()
