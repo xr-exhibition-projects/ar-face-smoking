@@ -105,6 +105,10 @@ class FrameWorker(threading.Thread):
             # Mark the frame as done in the queue
             self.video_processor.frame_queue.get()
             self.video_processor.frame_queue.task_done()
+            
+            # Периодически очищаем GPU кэш после обработки кадра для предотвращения перегрузки
+            if self.frame_number % 20 == 0:
+                torch.cuda.empty_cache()
 
             # Check if playback is complete
             if self.video_processor.frame_queue.empty() and not self.video_processor.processing and self.video_processor.next_frame_to_display >= self.video_processor.max_frame_number:
@@ -879,6 +883,11 @@ class FrameWorker(threading.Thread):
                         texture_canvas = texture_canvas * (1.0 - blend_strength) + aging_swap.float() * blend_strength
                     else:
                         texture_canvas = aging_swap.float()
+                    
+                    # Освобождаем память от промежуточных тензоров
+                    del aging_swap, input_face_affined_swap, output
+                    if self.models_processor.device == "cuda":
+                        torch.cuda.empty_cache()
             except Exception:
                 pass
         
@@ -944,6 +953,13 @@ class FrameWorker(threading.Thread):
                             
                             # Обновляем texture_canvas
                             texture_canvas = texture_canvas_float
+                            
+                            # Освобождаем память от промежуточных тензоров
+                            del aligned_ref_img
+                            if 'texture_canvas_float' in locals() and texture_canvas_float is not texture_canvas:
+                                del texture_canvas_float
+                            if self.models_processor.device == "cuda":
+                                torch.cuda.empty_cache()
                 else:
                     # Reference image не найден - эффект зомби не может быть применен
                     pass

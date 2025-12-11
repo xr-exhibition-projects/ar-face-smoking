@@ -83,11 +83,29 @@ class VideoProcessor(QObject):
     def store_frame_to_display(self, frame_number, pixmap, frame):
         # print("Called store_frame_to_display()")
         self.frames_to_display[frame_number] = (pixmap, frame)
+        
+        # Ограничиваем размер словаря, чтобы предотвратить утечку памяти
+        # Удаляем старые кадры, если словарь слишком большой (больше 30 кадров)
+        MAX_FRAMES_BUFFER = 30
+        if len(self.frames_to_display) > MAX_FRAMES_BUFFER:
+            # Удаляем самые старые кадры (с наименьшими номерами)
+            frames_to_remove = sorted(self.frames_to_display.keys())[:len(self.frames_to_display) - MAX_FRAMES_BUFFER]
+            for old_frame_num in frames_to_remove:
+                self.frames_to_display.pop(old_frame_num, None)
 
     # Use a queue to store the webcam frames, since the order of frames is not that important (Unless there are too many threads)
     Slot(QPixmap, numpy.ndarray)
     def store_webcam_frame_to_display(self, pixmap, frame):
         # print("Called store_webcam_frame_to_display()")
+        # Ограничиваем размер очереди, чтобы предотвратить утечку памяти
+        # Удаляем старые кадры, если очередь слишком большая (больше 10 кадров)
+        MAX_WEBCAM_FRAMES_BUFFER = 10
+        if self.webcam_frames_to_display.qsize() >= MAX_WEBCAM_FRAMES_BUFFER:
+            try:
+                # Удаляем самый старый кадр из очереди
+                self.webcam_frames_to_display.get_nowait()
+            except queue.Empty:
+                pass
         self.webcam_frames_to_display.put((pixmap, frame))
 
     Slot(int, QPixmap, numpy.ndarray)
@@ -122,6 +140,10 @@ class VideoProcessor(QObject):
             graphics_view_actions.update_graphics_view(self.main_window, pixmap, self.next_frame_to_display)
             self.threads.pop(self.next_frame_to_display, None)
             self.next_frame_to_display += 1
+            
+            # Периодически очищаем GPU кэш для предотвращения перегрузки
+            if self.next_frame_to_display % 10 == 0:
+                torch.cuda.empty_cache()
 
     def display_next_webcam_frame(self):
         # print("Called display_next_webcam_frame()")
@@ -135,6 +157,14 @@ class VideoProcessor(QObject):
             self.current_frame = frame
             self.send_frame_to_virtualcam(frame)
             graphics_view_actions.update_graphics_view(self.main_window, pixmap, 0)
+            
+            # Периодически очищаем GPU кэш для предотвращения перегрузки
+            # Используем счетчик кадров вместо qsize(), так как очередь может быть пустой
+            if not hasattr(self, '_webcam_frame_counter'):
+                self._webcam_frame_counter = 0
+            self._webcam_frame_counter += 1
+            if self._webcam_frame_counter % 10 == 0:
+                torch.cuda.empty_cache()
 
     def send_frame_to_virtualcam(self, frame: numpy.ndarray):
         if self.main_window.control.get('SendVirtCamFramesEnableToggle', False) and self.virtcam:
@@ -345,9 +375,16 @@ class VideoProcessor(QObject):
             self.threads.clear()
             self.frames_to_display.clear()
             self.webcam_frames_to_display.queue.clear()
+            
+            # Сбрасываем счетчик кадров веб-камеры
+            if hasattr(self, '_webcam_frame_counter'):
+                self._webcam_frame_counter = 0
 
             with self.frame_queue.mutex:
                 self.frame_queue.queue.clear()
+            
+            # Очищаем GPU кэш при остановке обработки
+            torch.cuda.empty_cache()
 
             self.current_frame_number = self.main_window.videoSeekSlider.value()
             if self.media_capture:
