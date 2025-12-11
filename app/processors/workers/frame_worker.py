@@ -2,6 +2,7 @@ import traceback
 from typing import TYPE_CHECKING
 import threading
 from math import floor, ceil
+import time
 
 import torch
 import cv2
@@ -17,6 +18,7 @@ from app.processors.utils import faceutil
 import app.ui.widgets.actions.common_actions as common_widget_actions
 from app.ui.widgets.actions import video_control_actions
 from app.helpers.miscellaneous import t512,t384,t256,t128, ParametersDict
+from app.helpers.memory_logger import get_memory_logger, log_gpu_memory, log_cache_clear, log_frame_processing_time
 
 if TYPE_CHECKING:
     from app.ui.main_ui import MainWindow
@@ -107,8 +109,12 @@ class FrameWorker(threading.Thread):
             self.video_processor.frame_queue.task_done()
             
             # Периодически очищаем GPU кэш после обработки кадра для предотвращения перегрузки
-            if self.frame_number % 20 == 0:
+            # Уменьшено до каждых 10 кадров для более агрессивной очистки
+            if self.frame_number % 10 == 0:
+                logger = get_memory_logger()
                 torch.cuda.empty_cache()
+                log_cache_clear(logger, f"frame_worker after processing frame {self.frame_number}")
+                log_gpu_memory(logger, f"after processing frame {self.frame_number}")
 
             # Check if playback is complete
             if self.video_processor.frame_queue.empty() and not self.video_processor.processing and self.video_processor.next_frame_to_display >= self.video_processor.max_frame_number:
@@ -120,6 +126,12 @@ class FrameWorker(threading.Thread):
     
     # @misc_helpers.benchmark
     def process_frame(self):
+        # Логируем начало обработки кадра
+        logger = get_memory_logger()
+        start_time = time.time()
+        if self.frame_number % 30 == 0:  # Логируем каждые 30 кадров, чтобы не перегружать лог
+            log_gpu_memory(logger, f"before processing frame {self.frame_number}")
+        
         # Load frame into VRAM
         img = torch.from_numpy(self.frame.astype('uint8')).to(self.models_processor.device) #HxWxc
         img = img.permute(2,0,1)#cxHxW
@@ -243,9 +255,21 @@ class FrameWorker(threading.Thread):
             img = self.enhance_core(img, control=control)
 
         img = img.permute(1,2,0)
-        img = img.cpu().numpy()
+        img_numpy = img.cpu().numpy()
+        # Освобождаем память от тензора перед возвратом
+        del img
+        if self.models_processor.device == "cuda":
+            torch.cuda.empty_cache()
+        
+        # Логируем время обработки кадра и использование памяти
+        processing_time = time.time() - start_time
+        if self.frame_number % 30 == 0:  # Логируем каждые 30 кадров, чтобы не перегружать лог
+            logger = get_memory_logger()
+            log_frame_processing_time(logger, self.frame_number, processing_time)
+            log_gpu_memory(logger, f"after processing frame {self.frame_number}")
+        
         # RGB to BGR
-        return img[..., ::-1]
+        return img_numpy[..., ::-1]
     
     def keypoints_adjustments(self, kps_5: np.ndarray, parameters: dict) -> np.ndarray:
         # Change the ref points
@@ -1195,6 +1219,33 @@ class FrameWorker(threading.Thread):
         
         img[0:3, top:bottom, left:right] = swap
 
+        # Освобождаем память от больших тензоров перед возвратом
+        # Оставляем только то, что нужно вернуть
+        if self.models_processor.device == "cuda":
+            logger = get_memory_logger()
+            # Явно удаляем промежуточные тензоры
+            tensors_freed = []
+            if 'swap' in locals() and swap is not None:
+                del swap
+                tensors_freed.append("swap")
+            if 'swap_mask' in locals() and swap_mask is not None:
+                del swap_mask
+                tensors_freed.append("swap_mask")
+            if 'border_mask' in locals() and border_mask is not None:
+                del border_mask
+                tensors_freed.append("border_mask")
+            if 'texture_canvas' in locals() and texture_canvas is not None:
+                del texture_canvas
+                tensors_freed.append("texture_canvas")
+            
+            if tensors_freed:
+                logger.info(f"[Memory Free] Frame {self.frame_number}: Freed tensors: {', '.join(tensors_freed)}")
+            
+            # Периодически очищаем кэш
+            if self.frame_number % 5 == 0:
+                torch.cuda.empty_cache()
+                log_cache_clear(logger, f"swap_core after freeing tensors (frame {self.frame_number})")
+                log_gpu_memory(logger, f"after freeing tensors (frame {self.frame_number})")
 
         return img, original_face_512_clone, swap_mask_clone
 
