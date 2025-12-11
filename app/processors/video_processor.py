@@ -409,17 +409,28 @@ class VideoProcessor(QObject):
             return False
         
         print("Stopping video processing.")
+        logger = get_memory_logger()
+        logger.info("=" * 80)
+        logger.info("[Stop Processing] Starting stop_processing()")
+        log_gpu_memory(logger, "stop_processing start")
+        
         self.processing = False
         
         if self.file_type=='video' or self.file_type=='webcam':
 
+            logger.info("[Stop Processing] Stopping timers...")
             # print("Stopping Timers")
             self.frame_read_timer.stop()
             self.frame_display_timer.stop()
             self.gpu_memory_update_timer.stop()
+            logger.info("[Stop Processing] Timers stopped")
+            
+            logger.info("[Stop Processing] Joining threads...")
             self.join_and_clear_threads()
+            logger.info("[Stop Processing] Threads joined")
 
 
+            logger.info("[Stop Processing] Clearing threads and queues...")
             # print("Clearing Threads and Queues")
             self.threads.clear()
             self.frames_to_display.clear()
@@ -429,32 +440,59 @@ class VideoProcessor(QObject):
             if hasattr(self, '_webcam_frame_display_counter'):
                 self._webcam_frame_display_counter = 0
 
+            logger.info("[Stop Processing] Clearing frame_queue...")
             with self.frame_queue.mutex:
                 self.frame_queue.queue.clear()
+            logger.info("[Stop Processing] frame_queue cleared")
             
             # Очищаем GPU кэш при остановке обработки
-            logger = get_memory_logger()
+            logger.info("[Stop Processing] Clearing GPU cache...")
             torch.cuda.empty_cache()
             log_cache_clear(logger, "stop_processing")
-            log_gpu_memory(logger, "after stop_processing")
+            log_gpu_memory(logger, "after clearing queues")
 
+            logger.info("[Stop Processing] Setting frame position...")
             self.current_frame_number = self.main_window.videoSeekSlider.value()
             if self.media_capture:
                 self.media_capture.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_number)
+            logger.info(f"[Stop Processing] Frame position set to {self.current_frame_number}")
 
             if self.recording and self.file_type=='video':
-                self.recording_sp.stdin.close()
-                self.recording_sp.wait()
+                logger.info("[Stop Processing] Stopping recording subprocess...")
+                try:
+                    self.recording_sp.stdin.close()
+                    logger.info("[Stop Processing] Waiting for recording subprocess to finish (timeout: 10s)...")
+                    # Добавляем таймаут для wait(), чтобы не зависнуть
+                    try:
+                        self.recording_sp.wait(timeout=10.0)
+                        logger.info("[Stop Processing] Recording subprocess finished successfully")
+                    except subprocess.TimeoutExpired:
+                        logger.warning("[Stop Processing] Recording subprocess did not finish within 10s timeout! Terminating...")
+                        self.recording_sp.terminate()
+                        try:
+                            self.recording_sp.wait(timeout=2.0)
+                        except subprocess.TimeoutExpired:
+                            logger.warning("[Stop Processing] Recording subprocess did not terminate! Killing...")
+                            self.recording_sp.kill()
+                            self.recording_sp.wait()
+                except Exception as e:
+                    logger.error(f"[Stop Processing] Error stopping recording subprocess: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
+            logger.info("[Stop Processing] Calculating play end time...")
             if self.media_capture and self.fps:
                 self.play_end_time = float(self.media_capture.get(cv2.CAP_PROP_POS_FRAMES) / float(self.fps))
+                logger.info(f"[Stop Processing] Play end time: {self.play_end_time}")
 
             if self.file_type=='video':
                 if self.recording:
+                    logger.info("[Stop Processing] Processing recorded video...")
                     final_file_path = misc_helpers.get_output_file_path(self.media_path, self.main_window.control['OutputMediaFolder'])
                     if Path(final_file_path).is_file():
                         os.remove(final_file_path)
                     print("Adding audio...")
+                    logger.info("[Stop Processing] Running ffmpeg to add audio...")
                     args = ["ffmpeg",
                             '-hide_banner',
                             '-loglevel',    'error',
@@ -464,8 +502,19 @@ class VideoProcessor(QObject):
                             "-map", "0:v:0", "-map", "1:a:0?",
                             "-shortest",
                             final_file_path]
-                    subprocess.run(args, check=False) #Add Audio
-                    os.remove(self.temp_file)
+                    try:
+                        result = subprocess.run(args, check=False, timeout=30.0)  # Добавляем таймаут 30 секунд
+                        logger.info(f"[Stop Processing] ffmpeg finished with return code: {result.returncode}")
+                    except subprocess.TimeoutExpired:
+                        logger.error("[Stop Processing] ffmpeg did not finish within 30s timeout!")
+                    except Exception as e:
+                        logger.error(f"[Stop Processing] Error running ffmpeg: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                    
+                    if Path(self.temp_file).is_file():
+                        os.remove(self.temp_file)
+                        logger.info("[Stop Processing] Temporary file removed")
 
                 self.end_time = time.perf_counter()
                 processing_time = self.end_time - self.start_time
@@ -478,20 +527,45 @@ class VideoProcessor(QObject):
 
             self.recording = False #Set recording as False to make sure the next process_video() call doesnt not record the video, unless the user press the record button
 
+            logger.info("[Stop Processing] Final cache clearing...")
             print("Clearing Cache")
             torch.cuda.empty_cache()
             gc.collect()
+            log_gpu_memory(logger, "after final cache clear")
+            
+            logger.info("[Stop Processing] Resetting media buttons...")
             video_control_actions.reset_media_buttons(self.main_window)
+            
+            logger.info("[Stop Processing] Successfully completed!")
+            logger.info("=" * 80)
             print("Successfully Stopped Processing")
             return True
         
     def join_and_clear_threads(self):
-        # print("Joining Threads")
-        for _, thread in self.threads.items():
+        """Ожидает завершения потоков с таймаутом для предотвращения зависания."""
+        logger = get_memory_logger()
+        logger.info("[Thread Management] Starting to join threads...")
+        
+        threads_to_join = list(self.threads.items())
+        logger.info(f"[Thread Management] Found {len(threads_to_join)} threads to join")
+        
+        THREAD_JOIN_TIMEOUT = 5.0  # Таймаут в секундах для каждого потока
+        
+        for frame_num, thread in threads_to_join:
             if thread.is_alive():
-                thread.join()
-        # print('Clearing Threads')
+                logger.info(f"[Thread Management] Joining thread for frame {frame_num}...")
+                thread.join(timeout=THREAD_JOIN_TIMEOUT)
+                if thread.is_alive():
+                    logger.warning(f"[Thread Management] Thread for frame {frame_num} did not finish within {THREAD_JOIN_TIMEOUT}s timeout!")
+                    # Поток все еще жив - это проблема, но мы продолжаем, чтобы не зависнуть
+                else:
+                    logger.info(f"[Thread Management] Thread for frame {frame_num} joined successfully")
+            else:
+                logger.info(f"[Thread Management] Thread for frame {frame_num} already finished")
+        
+        logger.info("[Thread Management] Clearing threads dictionary")
         self.threads.clear()
+        logger.info("[Thread Management] Thread joining completed")
     
     def create_ffmpeg_subprocess(self):
         # Use Dimensions of the last processed frame as it could be different from the original frame due to restorers and frame enhancers 
