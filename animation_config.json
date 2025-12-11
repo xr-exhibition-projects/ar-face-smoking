@@ -1,7 +1,7 @@
 {
   "timings": {
     "stage1": {
-      "duration_ms": 7000
+      "duration_ms": 10000
     },
     "stage2": {
       "duration_ms": 2000
@@ -30,14 +30,14 @@
   "zombie_overlay": {
     "stage1": {
       "color_start": 0.0,
-      "color_end": 1.0,
+      "color_end": 0.7,
       "texture_start": 0.0,
-      "texture_end": 1.0
+      "texture_end": 0.7
     },
     "stage2": {
-      "color_start": 1.0,
+      "color_start": 0.7,
       "color_end": 1.0,
-      "texture_start": 1.0,
+      "texture_start": 0.7,
       "texture_end": 1.0
     },
     "stage3": {

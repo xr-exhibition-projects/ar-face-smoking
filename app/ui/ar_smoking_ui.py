@@ -704,6 +704,8 @@ class ARSmokingWindow(main_ui.MainWindow):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
+            print(f"[DEBUG] Loaded animation config from: {config_path}")
+            print(f"[DEBUG] Stage1 duration_ms in loaded config: {config.get('timings', {}).get('stage1', {}).get('duration_ms', 'NOT FOUND')}")
             # Валидация и применение дефолтных значений для отсутствующих ключей
             if "animation_stages" not in config:
                 config["animation_stages"] = default_config["animation_stages"]
@@ -846,6 +848,16 @@ class ARSmokingWindow(main_ui.MainWindow):
 
         # Вычисляем прогресс этапа (0.0 - 1.0) на основе прошедшего времени
         stage_progress = self._compute_stage_progress()
+        
+        # Отладочный вывод (только для stage1 и каждые ~100 вызовов, чтобы не засорять консоль)
+        if self._current_stage == 1 and hasattr(self, '_zombie_debug_counter'):
+            self._zombie_debug_counter = getattr(self, '_zombie_debug_counter', 0) + 1
+            if self._zombie_debug_counter % 100 == 0:
+                current_time = time.monotonic()
+                elapsed_ms = (current_time - self._stage_start_time) * 1000.0 if self._stage_start_time > 0 else 0
+                print(f"[DEBUG] Zombie overlay: stage={self._current_stage}, progress={stage_progress:.3f}, elapsed_ms={elapsed_ms:.0f}, duration_ms={self._stage_duration_ms}, texture={texture_start:.2f}->{texture_end:.2f}")
+        elif self._current_stage == 1:
+            self._zombie_debug_counter = 1
 
         # Плавно интерполируем между start и end значениями
         # stage_progress = 0.0 -> current = start
@@ -1102,13 +1114,7 @@ class ARSmokingWindow(main_ui.MainWindow):
             self._current_stage = 1
             self._start_stage1_animation()
             
-            if self._stage_start_time <= 0 or self._stage_duration_ms <= 0:
-                timings = self._animation_config.get("timings", {})
-                stage1_timings = timings.get("stage1", {})
-                duration_ms = stage1_timings.get("duration_ms", 4000)
-                self._stage_start_time = time.monotonic()
-                self._stage_duration_ms = duration_ms
-            
+            # Убеждаемся, что этап установлен правильно (на случай, если _start_stage1_animation() не установил его)
             if self._current_stage != 1:
                 self._current_stage = 1
             
@@ -1777,7 +1783,10 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Загружаем конфигурацию анимации
         timings = self._animation_config.get("timings", {})
         stage1_timings = timings.get("stage1", {})
-        duration_ms = stage1_timings.get("duration_ms", 4000)
+        duration_ms_raw = stage1_timings.get("duration_ms", 4000)
+        # Убеждаемся, что значение - это целое число (int), а не float или строка
+        duration_ms = int(duration_ms_raw) if duration_ms_raw else 4000
+        print(f"[DEBUG] Stage1 duration_ms from config: raw={duration_ms_raw} (type={type(duration_ms_raw)}), converted={duration_ms}")
         
         # Загружаем параметры интенсивности
         animation_stages = self._animation_config.get("animation_stages", {})
@@ -1803,6 +1812,7 @@ class ARSmokingWindow(main_ui.MainWindow):
         # Запускаем таймер для показа кнопки "слезть"
         self._stage_start_time = time.monotonic()
         self._stage_duration_ms = duration_ms
+        print(f"[DEBUG] Stage1 started: _stage_start_time={self._stage_start_time}, _stage_duration_ms={self._stage_duration_ms}")
         
         # Останавливаем предыдущий таймер, если он был запущен
         if self._stage1_timer:
@@ -2950,7 +2960,12 @@ class ARSmokingWindow(main_ui.MainWindow):
             duration_val = int(stage_timings.get("duration_ms", 4000))
             
             if f'Stage{stage_num}DurationSlider' in self.parameter_widgets:
-                self.parameter_widgets[f'Stage{stage_num}DurationSlider'].set_value(duration_val)
+                slider = self.parameter_widgets[f'Stage{stage_num}DurationSlider']
+                # Временно блокируем сигналы, чтобы избежать перезаписи конфига при установке значения
+                slider.blockSignals(True)
+                slider.set_value(duration_val)
+                slider.blockSignals(False)
+                print(f"[DEBUG] Loaded Stage{stage_num}DurationSlider value: {duration_val} from config")
     
     def _save_animation_config(self) -> None:
         """Сохраняет текущую конфигурацию анимации в файл."""
