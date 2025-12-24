@@ -912,7 +912,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'ColorEnableToggle': {
             'level': 1,
             'label': 'Color Adjustments',
-            'default': True,
+            'default': False,
             'help': 'Fine-tune the RGB color values of the swap.'
         },
         'ColorRedSlider': {
@@ -920,7 +920,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Red',
             'min_value': '-100',
             'max_value': '100',
-            'default': '-12',
+            'default': '-10',
             'step': 1,
             'parentToggle': 'ColorEnableToggle',
             'requiredToggleValue': True,
@@ -953,7 +953,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Brightness',
             'min_value': '0.00',
             'max_value': '2.00',
-            'default': '1.00',
+            'default': '2.00',
             'step': 0.01,
             'decimals': 2,
             'parentToggle': 'ColorEnableToggle',
@@ -1057,7 +1057,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Texture Strength',
             'min_value': '0',
             'max_value': '200',
-            'default': '5',
+            'default': '10',
             'step': 5,
             'help': 'Adjust how strongly the zombie overlay texture is blended.'
         },
@@ -1066,7 +1066,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Color Strength',
             'min_value': '0',
             'max_value': '200',
-            'default': '150',
+            'default': '100',
             'step': 5,
             'help': 'Control how much of the reference color palette is transferred (values above 100 overdrive the tint).'
         }
