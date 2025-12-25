@@ -230,7 +230,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'StrengthEnableToggle': {
             'level': 1,
             'label': 'Strength',
-            'default': False,
+            'default': True,
             'help': 'Apply additional swapping iterations to increase the strength of the result, which may increase likeness.'
         },
         'StrengthAmountSlider': {
@@ -238,7 +238,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Amount',
             'min_value': '0',
             'max_value': '500',
-            'default': '300',
+            'default': '470',
             'step': 25,
             'parentToggle': 'StrengthEnableToggle',
             'requiredToggleValue': True,
@@ -247,7 +247,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'FaceLikenessEnableToggle': {
             'level': 1,
             'label': 'Face Likeness',
-            'default': False,
+            'default': True,
             'help': 'This is a feature to perform direct adjustments to likeness of faces.'
         },
         'FaceLikenessFactorDecimalSlider': {
@@ -255,7 +255,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Amount',
             'min_value': '-1.00',
             'max_value': '1.00',
-            'default': '0.00',
+            'default': '-0.4',
             'decimals': 2,
             'step': 0.05,
             'parentToggle': 'FaceLikenessEnableToggle',
@@ -1032,7 +1032,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'requiredToggleValue': True,
             'help': 'Add noise to swapped face.'
         },
-
+ 
         'JPEGCompressionEnableToggle': {
             'level': 1,
             'label': 'JPEG Compression',
@@ -1057,7 +1057,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Texture Strength',
             'min_value': '0',
             'max_value': '200',
-            'default': '10',
+            'default': '0',
             'step': 5,
             'help': 'Adjust how strongly the zombie overlay texture is blended.'
         },
@@ -1066,7 +1066,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Color Strength',
             'min_value': '0',
             'max_value': '200',
-            'default': '80',
+            'default': '70',
             'step': 5,
             'help': 'Control how much of the reference color palette is transferred (values above 100 overdrive the tint).'
         }

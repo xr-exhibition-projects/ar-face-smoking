@@ -1,7 +1,7 @@
 {
   "timings": {
     "stage1": {
-      "duration_ms": 10000
+      "duration_ms": 2000
     },
     "stage2": {
       "duration_ms": 2000
@@ -16,10 +16,10 @@
   "animation_stages": {
     "stage1": {
       "start_intensity": 0.0,
-      "end_intensity": 1.0
+      "end_intensity": 0.8
     },
     "stage2": {
-      "start_intensity": 1.0,
+      "start_intensity": 0.8,
       "end_intensity": 1.0
     },
     "stage3": {
@@ -36,14 +36,14 @@
     },
     "stage2": {
       "color_start": 0.0,
-      "color_end": 1.0,
+      "color_end": 0.8,
       "texture_start": 0.0,
-      "texture_end": 1.0
+      "texture_end": 0.8
     },
     "stage3": {
-      "color_start": 1.0,
+      "color_start": 0.8,
       "color_end": 1.0,
-      "texture_start": 1.0,
+      "texture_start": 0.8,
       "texture_end": 1.0
     }
   },

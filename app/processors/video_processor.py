@@ -40,7 +40,7 @@ class VideoProcessor(QObject):
         logger = get_memory_logger()
         logger.info("=" * 80)
         logger.info("VideoProcessor initialized")
-        log_gpu_memory(logger, "VideoProcessor.__init__")
+        log_gpu_memory(logger, "VideoProcessor.__init__", log_to_console=True)
         self.media_capture: cv2.VideoCapture|None = None
         self.file_type = None
         self.fps = 0
@@ -412,7 +412,7 @@ class VideoProcessor(QObject):
         logger = get_memory_logger()
         logger.info("=" * 80)
         logger.info("[Stop Processing] Starting stop_processing()")
-        log_gpu_memory(logger, "stop_processing start")
+        log_gpu_memory(logger, "stop_processing start", log_to_console=True)
         
         self.processing = False
         
@@ -448,8 +448,8 @@ class VideoProcessor(QObject):
             # Очищаем GPU кэш при остановке обработки
             logger.info("[Stop Processing] Clearing GPU cache...")
             torch.cuda.empty_cache()
-            log_cache_clear(logger, "stop_processing")
-            log_gpu_memory(logger, "after clearing queues")
+            log_cache_clear(logger, "stop_processing", log_to_console=True)
+            log_gpu_memory(logger, "after clearing queues", log_to_console=True)
 
             logger.info("[Stop Processing] Setting frame position...")
             self.current_frame_number = self.main_window.videoSeekSlider.value()
@@ -531,7 +531,7 @@ class VideoProcessor(QObject):
             print("Clearing Cache")
             torch.cuda.empty_cache()
             gc.collect()
-            log_gpu_memory(logger, "after final cache clear")
+            log_gpu_memory(logger, "after final cache clear", log_to_console=True)
             
             logger.info("[Stop Processing] Resetting media buttons...")
             video_control_actions.reset_media_buttons(self.main_window)

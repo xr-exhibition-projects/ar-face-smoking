@@ -317,6 +317,34 @@ class ARSmokingWindow(main_ui.MainWindow):
         import copy
         from app.helpers.miscellaneous import ParametersDict
         self.current_widget_parameters = ParametersDict(copy.deepcopy(self.default_parameters), self.default_parameters)
+        
+        # Загружаем виджеты во вкладки ControlPanel
+        # Это нужно для того, чтобы контролы были видны в ControlPanel
+        from app.ui.widgets.face_editor_layout_data import FACE_EDITOR_LAYOUT_DATA
+        
+        # Проверяем, что layout'ы существуют (они создаются в setupUi)
+        if hasattr(self, "swapWidgetsLayout") and hasattr(self, "faceEditorWidgetsLayout") and \
+           hasattr(self, "commonWidgetsLayout") and hasattr(self, "settingsWidgetsLayout"):
+            layout_actions.add_widgets_to_tab_layout(self, LAYOUT_DATA=COMMON_LAYOUT_DATA, layoutWidget=self.commonWidgetsLayout, data_type='parameter')
+            layout_actions.add_widgets_to_tab_layout(self, LAYOUT_DATA=SWAPPER_LAYOUT_DATA, layoutWidget=self.swapWidgetsLayout, data_type='parameter')
+            layout_actions.add_widgets_to_tab_layout(self, LAYOUT_DATA=SETTINGS_LAYOUT_DATA, layoutWidget=self.settingsWidgetsLayout, data_type='control')
+            layout_actions.add_widgets_to_tab_layout(self, LAYOUT_DATA=FACE_EDITOR_LAYOUT_DATA, layoutWidget=self.faceEditorWidgetsLayout, data_type='parameter')
+            
+            # Set up output folder select button (It is inside the settings tab Widget)
+            if hasattr(self, "outputFolderButton"):
+                self.outputFolderButton.clicked.connect(partial(list_view_actions.select_output_media_folder, self))
+            
+            # Set GPU Memory Progressbar
+            if hasattr(self, "vramProgressBar"):
+                font = self.vramProgressBar.font()
+                font.setBold(True)
+                self.vramProgressBar.setFont(font)
+                from app.ui.widgets.actions import common_actions as common_widget_actions
+                common_widget_actions.update_gpu_memory_progressbar(self)
+            
+            # Set face_swap_tab as the default focused tab
+            if hasattr(self, "tabWidget"):
+                self.tabWidget.setCurrentIndex(0)
     
     def load_last_workspace(self) -> None:  # type: ignore[override]
         """Отключаем автозагрузку рабочего пространства."""
@@ -2793,15 +2821,32 @@ class ARSmokingWindow(main_ui.MainWindow):
         if self._control_options_widget and shiboken6.isValid(self._control_options_widget):
             return True
 
+        # Попытка получить виджет из controlOptionsDockWidget
         if hasattr(self, "controlOptionsDockWidget") and self.controlOptionsDockWidget:
             panel_widget = self.controlOptionsDockWidget.widget()
             if panel_widget and shiboken6.isValid(panel_widget):
                 self.controlOptionsDockWidget.setWidget(None)
-                self.removeDockWidget(self.controlOptionsDockWidget)
+                if hasattr(self, "removeDockWidget"):
+                    self.removeDockWidget(self.controlOptionsDockWidget)
                 self.controlOptionsDockWidget.setParent(None)
                 panel_widget.setParent(None)
                 self._control_options_widget = panel_widget
             self.controlOptionsDockWidget = None
+        
+        # Если виджет все еще не получен, попробуем получить напрямую через dockWidgetContents_2
+        if not self._control_options_widget and hasattr(self, "dockWidgetContents_2"):
+            if self.dockWidgetContents_2 and shiboken6.isValid(self.dockWidgetContents_2):
+                self._control_options_widget = self.dockWidgetContents_2
+        
+        # Если виджет все еще не получен, но есть tabWidget, значит UI не полностью инициализирован
+        # В этом случае просто вернем False - виджет будет создан позже при первом открытии
+        if not self._control_options_widget:
+            if hasattr(self, "tabWidget") and self.tabWidget:
+                # tabWidget существует, но родительский виджет не найден - это странно
+                # Попробуем получить родителя tabWidget
+                parent = self.tabWidget.parent()
+                if parent and shiboken6.isValid(parent):
+                    self._control_options_widget = parent
 
         # Add Effect Params tab if not exists
         if self._control_options_widget and hasattr(self, "tabWidget"):

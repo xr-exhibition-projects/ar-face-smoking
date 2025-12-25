@@ -1283,7 +1283,7 @@ class FrameWorker(threading.Thread):
                 tensors_freed.append("texture_canvas")
             
             if tensors_freed:
-                logger.info(f"[Memory Free] Frame {self.frame_number}: Freed tensors: {', '.join(tensors_freed)}")
+                logger.debug(f"[Memory Free] Frame {self.frame_number}: Freed tensors: {', '.join(tensors_freed)}")
             
             # Периодически очищаем кэш
             if self.frame_number % 5 == 0:
