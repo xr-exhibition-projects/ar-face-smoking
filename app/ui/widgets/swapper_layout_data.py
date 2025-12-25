@@ -238,7 +238,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Amount',
             'min_value': '0',
             'max_value': '500',
-            'default': '470',
+            'default': '400',
             'step': 25,
             'parentToggle': 'StrengthEnableToggle',
             'requiredToggleValue': True,
@@ -912,7 +912,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
         'ColorEnableToggle': {
             'level': 1,
             'label': 'Color Adjustments',
-            'default': False,
+            'default': True,
             'help': 'Fine-tune the RGB color values of the swap.'
         },
         'ColorRedSlider': {
@@ -920,7 +920,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Red',
             'min_value': '-100',
             'max_value': '100',
-            'default': '-10',
+            'default': '0',
             'step': 1,
             'parentToggle': 'ColorEnableToggle',
             'requiredToggleValue': True,
@@ -953,7 +953,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Brightness',
             'min_value': '0.00',
             'max_value': '2.00',
-            'default': '2.00',
+            'default': '1.00',
             'step': 0.01,
             'decimals': 2,
             'parentToggle': 'ColorEnableToggle',
