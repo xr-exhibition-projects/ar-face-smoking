@@ -333,7 +333,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Border Blur',
             'min_value': '0',
             'max_value': '100',
-            'default': '10',
+            'default': '30',
             'step': 1,
             'help': 'Border mask blending distance.'
         },
@@ -721,7 +721,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Eyes Feather Blend',
             'min_value': '1',
             'max_value': '100',
-            'default': '83',
+            'default': '50',
             'step': 1,
             'parentToggle': 'RestoreEyesEnableToggle',
             'requiredToggleValue': True,
@@ -732,7 +732,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'X Eyes Radius Factor',
             'min_value': '0.3',
             'max_value': '3.0',
-            'default': '1.7',
+            'default': '1.0',
             'decimals': 1,
             'step': 0.1,
             'parentToggle': 'RestoreEyesEnableToggle',
@@ -1066,7 +1066,7 @@ SWAPPER_LAYOUT_DATA: LayoutDictTypes = {
             'label': 'Color Strength',
             'min_value': '0',
             'max_value': '200',
-            'default': '100',
+            'default': '80',
             'step': 5,
             'help': 'Control how much of the reference color palette is transferred (values above 100 overdrive the tint).'
         }
